@@ -37,7 +37,7 @@ export default function Navbar() {
       {/* Menu Navigasi */}
       <nav className="hidden lg:flex items-center gap-6 text-xs tracking-wider font-semibold uppercase flex-shrink-0">
         <Link href="/discover" className="hover:text-[#FF2E9A] transition">DISCOVER</Link>
-        <Link href="/my-tickets" className="hover:text-[#FF2E9A] transition">MY CART</Link>
+        <Link href="/my-tickets" className="hover:text-[#FF2E9A] transition">MY TICKETS</Link>
         <Link href="/about" className="hover:text-[#FF2E9A] transition">ABOUT US</Link>
         <Link href="/contact" className="hover:text-[#FF2E9A] transition">CONTACT US</Link>
 

@@ -52,7 +52,7 @@ export default function AboutPage() {
             </h2>
           </div>
 
-          <p className="text-sm md:text-base text-[#FF2E9A] leading-relaxed font-medium">
+          <p className="text-sm md:text-base text-[#FF2E9A] leading-relaxed font-medium text-justify">
             Gigspace adalah platform penemuan dan pemesanan tiket pertunjukan musik lokal secara instan. Kami hadir untuk menghubungkan penikmat musik dengan berbagai gig lokal, festival, dan panggung independen secara mudah, transparan, dan terintegrasi dalam satu wadah visual yang dinamis.
           </p>
         </section>

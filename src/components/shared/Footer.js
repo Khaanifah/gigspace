@@ -23,7 +23,7 @@ export default function Footer() {
           <h4 className="text-white font-bold mb-3">Information</h4>
           <ul className="space-y-2 text-gray-400">
             <li><Link href="/discover" className="hover:text-white">Discover</Link></li>
-            <li><Link href="/my-tickets" className="hover:text-white">My Cart</Link></li>
+            <li><Link href="/my-tickets" className="hover:text-white">My Tickets</Link></li>
             <li><Link href="/about" className="hover:text-white">About Us</Link></li>
           </ul>
         </div>
