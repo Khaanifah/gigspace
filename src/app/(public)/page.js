@@ -2,26 +2,16 @@
 
 import { useRef } from 'react';
 import Link from 'next/link';
-import { eventsData } from '@/lib/eventsData';
+import { useApiData } from '@/lib/useApiData';
 
 export default function HomePage() {
   const popularScrollRef = useRef(null);
 
-  // Ambil data dari eventsData agar saat diklik langsung nyambung ke /events/[id]
-  const popularGigs = eventsData.slice(0, 8);
-  const upcomingGigs = eventsData.slice(0, 4);
-  const thisWeekGroups = [
-    {
-      date: '4',
-      month: 'Nov',
-      gigs: eventsData.slice(0, 3),
-    },
-    {
-      date: '12',
-      month: 'Nov',
-      gigs: eventsData.slice(3, 5),
-    },
-  ];
+  // Data dari database lewat GET /api/home (populer, akan datang, minggu ini)
+  const { data: home } = useApiData('/api/home');
+  const popularGigs = home?.popular ?? [];
+  const upcomingGigs = home?.upcoming ?? [];
+  const thisWeekGroups = home?.thisWeek ?? [];
 
   const scrollPopular = (direction) => {
     if (!popularScrollRef.current) return;

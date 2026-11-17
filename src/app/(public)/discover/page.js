@@ -1,19 +1,9 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
-import { EmptyState } from '@/components/shared/UIStates';
-
-// Data sementara agar layout grid 4x4 langsung tampil sebelum sambung ke Supabase
-const concertsData = Array.from({ length: 32 }, (_, i) => ({
-  id: i + 1,
-  location: 'Lokasi',
-  title: 'Nama Gigs',
-  organizer: 'Penyelenggara',
-  genre: ['Indie', 'Rock', 'Solo', 'Classic'][i % 4],
-  price: 666000,
-  image: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop',
-}));
+import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
+import { useApiData } from '@/lib/useApiData';
 
 export default function DiscoverPage() {
   const [selectedGenre, setSelectedGenre] = useState('All');
@@ -24,30 +14,17 @@ export default function DiscoverPage() {
 
   const ITEMS_PER_PAGE = 16; // 4 kolom x 4 baris
 
-  // Filter & Sort logic
-  const filteredConcerts = useMemo(() => {
-    let result = [...concertsData];
+  // Filter, urutan, dan pagination diproses di server (GET /api/events)
+  const query = new URLSearchParams({
+    page: String(currentPage),
+    pageSize: String(ITEMS_PER_PAGE),
+    sort: sortBy,
+  });
+  if (selectedGenre !== 'All') query.set('genre', selectedGenre);
 
-    if (selectedGenre !== 'All') {
-      result = result.filter(
-        (item) => item.genre?.toLowerCase() === selectedGenre.toLowerCase()
-      );
-    }
-
-    if (sortBy === 'price-asc') {
-      result.sort((a, b) => (a.price || 0) - (b.price || 0));
-    } else if (sortBy === 'price-desc') {
-      result.sort((a, b) => (b.price || 0) - (a.price || 0));
-    }
-
-    return result;
-  }, [selectedGenre, sortBy]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredConcerts.length / ITEMS_PER_PAGE));
-  const paginatedConcerts = filteredConcerts.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const { data, error, isLoading, reload } = useApiData(`/api/events?${query.toString()}`);
+  const paginatedConcerts = data?.items ?? [];
+  const totalPages = Math.max(1, data?.pagination?.totalPages ?? 1);
 
   const formatRupiah = (amount) => {
     return new Intl.NumberFormat('id-ID', {
@@ -175,7 +152,11 @@ export default function DiscoverPage() {
           </div>
 
           {/* Grid 4x4 Concert Cards */}
-          {paginatedConcerts.length === 0 ? (
+          {isLoading ? (
+            <GigsGridSkeleton count={ITEMS_PER_PAGE} />
+          ) : error ? (
+            <ErrorState message={error} onRetry={reload} />
+          ) : paginatedConcerts.length === 0 ? (
             <EmptyState
               title={`Belum ada konser genre ${selectedGenre}`}
               description="Coba pilih kategori genre lainnya atau tampilkan semua konser."

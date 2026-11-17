@@ -1,14 +1,11 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { eventsData } from '@/lib/eventsData';
+import { useRouter } from 'next/navigation';
 import { EmptyState, StatusAlert } from '@/components/shared/UIStates';
 
 function CheckoutContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const eventIdParam = searchParams.get('eventId') || '1';
 
   const [orderSummary, setOrderSummary] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -21,67 +18,22 @@ function CheckoutContent() {
   });
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Ambil data tiket yang dipilih dari sessionStorage (atau fallback dari eventId)
+  // Pilihan tiket disimpan sementara di sessionStorage oleh halaman detail event.
+  // Ini hanya keranjang di sisi klien: harga dan stok TIDAK dipercaya, server menghitung ulang saat pesanan dibuat.
   useEffect(() => {
-    const matchedEvent = eventsData.find((ev) => ev.id === eventIdParam);
-
     try {
       const savedRaw = sessionStorage.getItem('gigspace_checkout');
       if (savedRaw) {
         const parsed = JSON.parse(savedRaw);
         if (parsed && parsed.items?.length > 0) {
-          setOrderSummary({
-            ...parsed,
-            dateLabel: matchedEvent?.dateLabel || 'Kamis, 12 November 2026',
-            timeLabel: matchedEvent?.timeLabel || '16:30 WIB',
-            location: matchedEvent?.location || 'JIExpo Kemayoran, Jakarta Pusat',
-            image:
-              matchedEvent?.image ||
-              'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop',
-          });
-          setIsLoaded(true);
-          return;
+          setOrderSummary(parsed);
         }
       }
     } catch {
       // Abaikan jika sessionStorage tidak terbaca
     }
-
-    if (matchedEvent) {
-      const defaultItems = matchedEvent.ticketCategories
-        .filter((t) => t.status === 'on_sale')
-        .slice(0, 2)
-        .map((t) => ({
-          id: t.id,
-          name: t.name,
-          price: t.price,
-          quantity: 1,
-        }));
-
-      const subtotal = defaultItems.reduce(
-        (sum, item) => sum + item.price * item.quantity,
-        0
-      );
-      const totalItems = defaultItems.reduce(
-        (sum, item) => sum + item.quantity,
-        0
-      );
-
-      setOrderSummary({
-        eventId: matchedEvent.id,
-        eventTitle: matchedEvent.title,
-        dateLabel: matchedEvent.dateLabel,
-        timeLabel: matchedEvent.timeLabel,
-        location: matchedEvent.location,
-        image: matchedEvent.image,
-        items: defaultItems,
-        subtotal,
-        totalItems,
-      });
-    }
-
     setIsLoaded(true);
-  }, [eventIdParam]);
+  }, []);
 
   const formatRupiah = (amount) => {
     return new Intl.NumberFormat('id-ID', {
@@ -115,6 +67,16 @@ function CheckoutContent() {
       setErrorMessage(
         'Harap lengkapi seluruh data pemesan sebelum melanjutkan ke pembayaran.'
       );
+      return;
+    }
+
+    // Validasi lapis 1 (frontend): format email dan nomor WhatsApp. Server memvalidasi ulang.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerForm.email.trim())) {
+      setErrorMessage('Format email tidak valid.');
+      return;
+    }
+    if (!/^\+?\d{9,15}$/.test(buyerForm.whatsapp.replace(/[\s-]/g, ''))) {
+      setErrorMessage('Nomor WhatsApp tidak valid (9-15 digit angka).');
       return;
     }
 

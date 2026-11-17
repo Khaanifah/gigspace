@@ -2,25 +2,8 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { eventsData } from '@/lib/eventsData';
-import { EmptyState, StatusAlert } from '@/components/shared/UIStates';
-
-// Mapping Nomor Virtual Account / Nomor E-Wallet Tujuan berdasarkan metode yang dipilih
-const PAYMENT_DESTINATIONS = {
-  bri: { accountNumber: 'VABRI1234567' },
-  cimb: { accountNumber: 'VACIMB8890123' },
-  bni: { accountNumber: 'VABNI98812345' },
-  bca: { accountNumber: 'VABCA39012345' },
-  mandiri: { accountNumber: 'VAMDR88901234' },
-  bsi: { accountNumber: 'VABSI90012345' },
-  btn: { accountNumber: 'VABTN20012345' },
-  danamon: { accountNumber: 'VADMN77012345' },
-  qris: { accountNumber: 'ID102026GIGSPACE' },
-  shopeepay: { accountNumber: '0812-3456-7890' },
-  ovo: { accountNumber: '0812-3456-7890' },
-  dana: { accountNumber: '0812-3456-7890' },
-  linkaja: { accountNumber: '0812-3456-7890' },
-};
+import { EmptyState, ErrorState, StatusAlert } from '@/components/shared/UIStates';
+import { useApiData } from '@/lib/useApiData';
 
 function PaymentBrandLogo({ id }) {
   switch (id) {
@@ -128,11 +111,19 @@ function PaymentBrandLogo({ id }) {
 function InstructionContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const eventIdParam = searchParams.get('eventId') || '1';
+  const orderCode = searchParams.get('order');
   const fileInputRef = useRef(null);
 
-  const [orderSummary, setOrderSummary] = useState(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+  // Pesanan dibaca dari server (hanya milik pengguna yang login)
+  const {
+    data: orderData,
+    error: orderError,
+    status: orderHttpStatus,
+    isLoading,
+    reload,
+  } = useApiData(orderCode ? `/api/orders/${encodeURIComponent(orderCode)}` : null);
+  const orderSummary = orderData?.order ?? null;
+  const isLoaded = !isLoading;
 
   // State Upload Bukti Pembayaran
   const [uploadedFile, setUploadedFile] = useState(null);
@@ -142,56 +133,6 @@ function InstructionContent() {
   const [isValidProof, setIsValidProof] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    const matchedEvent = eventsData.find((ev) => ev.id === eventIdParam);
-
-    try {
-      const savedRaw = sessionStorage.getItem('gigspace_checkout');
-      if (savedRaw) {
-        const parsed = JSON.parse(savedRaw);
-        if (parsed) {
-          setOrderSummary({
-            ...parsed,
-            dateLabel: matchedEvent?.dateLabel || 'Kamis, 12 November 2026',
-            timeLabel: matchedEvent?.timeLabel || '16:30 WIB',
-            location: matchedEvent?.location || 'JIExpo Kemayoran, Jakarta Pusat',
-            image:
-              matchedEvent?.image ||
-              'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop',
-            paymentMethod: parsed.paymentMethod || {
-              category: 'bank',
-              id: 'bri',
-              name: 'BRI',
-            },
-          });
-          setIsLoaded(true);
-          return;
-        }
-      }
-    } catch {
-      // Fallback jika sessionStorage kosong
-    }
-
-    if (matchedEvent) {
-      setOrderSummary({
-        eventId: matchedEvent.id,
-        eventTitle: matchedEvent.title,
-        dateLabel: matchedEvent.dateLabel,
-        timeLabel: matchedEvent.timeLabel,
-        location: matchedEvent.location,
-        image: matchedEvent.image,
-        totalPay: matchedEvent.price + 7000,
-        paymentMethod: {
-          category: 'bank',
-          id: 'bri',
-          name: 'BRI',
-        },
-      });
-    }
-
-    setIsLoaded(true);
-  }, [eventIdParam]);
 
   useEffect(() => {
     return () => {
@@ -274,6 +215,27 @@ function InstructionContent() {
     return <div className="bg-[#FAF8ED] min-h-screen" />;
   }
 
+  if (orderError && orderHttpStatus === 401) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <EmptyState
+          title="Silakan login terlebih dahulu"
+          description="Anda harus login untuk melihat instruksi pembayaran pesanan ini."
+          actionLabel="Login"
+          onAction={() => router.push('/auth')}
+        />
+      </div>
+    );
+  }
+
+  if (orderError && orderHttpStatus !== 404) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <ErrorState message={orderError} onRetry={reload} />
+      </div>
+    );
+  }
+
   if (!orderSummary) {
     return (
       <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
@@ -294,8 +256,7 @@ function InstructionContent() {
   };
   const isBank = method.category === 'bank';
   const isQris = method.id === 'qris';
-  const destinationNumber =
-    PAYMENT_DESTINATIONS[method.id]?.accountNumber || 'VABRI1234567';
+  const destinationNumber = method.accountNumber || '';
 
   // Payload dinamis untuk Kode QR QRIS
   const qrisPayload = `GIGSPACE-QRIS|${orderSummary.eventTitle}|${destinationNumber}|TOTAL:${orderSummary.totalPay || 0}`;

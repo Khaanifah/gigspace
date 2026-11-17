@@ -2,19 +2,39 @@
 
 import { useState, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { eventsData } from '@/lib/eventsData';
-import { EmptyState } from '@/components/shared/UIStates';
+import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
+import { useApiData } from '@/lib/useApiData';
 
 export default function EventDetailPage({ params }) {
   const resolvedParams = use(params);
   const router = useRouter();
   const tabsRef = useRef(null);
 
-  const event = eventsData.find((item) => item.id === resolvedParams.id);
+  // Param [id] berisi slug event; datanya dari GET /api/events/[slug]
+  const { data, error, status, isLoading, reload } = useApiData(
+    `/api/events/${encodeURIComponent(resolvedParams.id)}`
+  );
+  const event = data?.event ?? null;
 
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeTab, setActiveTab] = useState('deskripsi'); // 'deskripsi' | 'tiket'
   const [quantities, setQuantities] = useState({});
+
+  if (isLoading) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <GigsGridSkeleton count={4} />
+      </div>
+    );
+  }
+
+  if (error && status !== 404) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <ErrorState message={error} onRetry={reload} />
+      </div>
+    );
+  }
 
   if (!event) {
     return (
@@ -96,6 +116,10 @@ export default function EventDetailPage({ params }) {
     const checkoutPayload = {
       eventId: event.id,
       eventTitle: event.title,
+      dateLabel: event.dateLabel,
+      timeLabel: event.timeLabel,
+      location: event.location,
+      image: event.image,
       items: selectedTickets.map((cat) => ({
         id: cat.id,
         name: cat.name,
@@ -114,7 +138,9 @@ export default function EventDetailPage({ params }) {
   const notReleasedTickets = event.ticketCategories.filter(
     (t) => t.status === 'not_released'
   );
-  const soldOutTickets = event.ticketCategories.filter((t) => t.status === 'sold_out');
+  const soldOutTickets = event.ticketCategories.filter(
+    (t) => t.status === 'sold_out' || t.status === 'ended'
+  );
 
   // Komponen Internal: Kartu Tiket dengan Notch Sobekan & Status Badge
   const renderTicketCard = (ticket) => {
@@ -132,6 +158,10 @@ export default function EventDetailPage({ params }) {
       },
       sold_out: {
         label: 'Sold Out',
+        className: 'bg-[#FDE8E8] text-[#E05252] border-[#F8B4B4]',
+      },
+      ended: {
+        label: 'Sales Ended',
         className: 'bg-[#FDE8E8] text-[#E05252] border-[#F8B4B4]',
       },
     }[ticket.status];

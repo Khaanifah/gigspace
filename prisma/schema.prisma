@@ -1,0 +1,412 @@
+// Gigspace — skema database (Prisma 6 + Supabase PostgreSQL)
+// CHECK constraint ada di prisma/constraints.sql (dipasang sebagai migrasi kedua).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooler Supabase (port 6543) untuk aplikasi
+  directUrl = env("DIRECT_URL")   // koneksi langsung (port 5432) untuk migrasi
+}
+
+// ───────────── ENUM ─────────────
+
+enum Role {
+  USER
+  ORGANIZER
+  ADMIN
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum PaymentCategory {
+  BANK
+  EWALLET
+  QRIS
+}
+
+enum VerificationDecision {
+  APPROVED
+  REJECTED
+}
+
+enum TicketStatus {
+  ACTIVE
+  USED
+  CANCELLED
+  EXPIRED
+}
+
+enum ContactStatus {
+  NEW
+  READ
+  REPLIED
+}
+
+enum OutboxStatus {
+  PENDING
+  ENQUEUED
+  FAILED
+}
+
+// ───────────── PENGGUNA ─────────────
+
+model User {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  authUserId String   @unique @map("auth_user_id") @db.Uuid // identitas di Supabase Auth
+  email      String   @unique
+  fullName   String?  @map("full_name")
+  whatsapp   String?
+  role       Role     @default(USER)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organizerProfile  OrganizerProfile?
+  orders            Order[]
+  tickets           Ticket[]
+  notifications     Notification[]
+  pushSubscriptions PushSubscription[]
+  verifications     PaymentVerification[]
+  checkins          TicketCheckin[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+}
+
+model OrganizerProfile {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String   @unique @map("user_id") @db.Uuid
+  organizationName String   @map("organization_name")
+  description      String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events Event[]
+
+  @@map("organizer_profiles")
+}
+
+// ───────────── EVENT ─────────────
+
+model Genre {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name   String  @unique
+  events Event[]
+
+  @@map("genres")
+}
+
+model Venue {
+  id      String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name    String
+  address String?
+  city    String
+  events  Event[]
+
+  @@map("venues")
+}
+
+model Event {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizerId  String      @map("organizer_id") @db.Uuid
+  genreId      String      @map("genre_id") @db.Uuid
+  venueId      String      @map("venue_id") @db.Uuid
+  title        String
+  slug         String      @unique
+  description  String
+  terms        String?
+  startsAt     DateTime    @map("starts_at") @db.Timestamptz(6)
+  endsAt       DateTime?   @map("ends_at") @db.Timestamptz(6)
+  status       EventStatus @default(DRAFT)
+  rejectReason String?     @map("reject_reason")
+  posterPath   String?     @map("poster_path")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organizer   OrganizerProfile @relation(fields: [organizerId], references: [id], onDelete: Restrict)
+  genre       Genre            @relation(fields: [genreId], references: [id], onDelete: Restrict)
+  venue       Venue            @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  images      EventImage[]
+  ticketTypes TicketType[]
+  tickets     Ticket[]
+
+  @@index([status, startsAt])
+  @@index([genreId])
+  @@index([organizerId])
+  @@map("events")
+}
+
+model EventImage {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId     String @map("event_id") @db.Uuid
+  storagePath String @map("storage_path")
+  sortOrder   Int    @default(0) @map("sort_order")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("event_images")
+}
+
+// ───────────── TIKET & PESANAN ─────────────
+
+model TicketType {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId      String   @map("event_id") @db.Uuid
+  name         String
+  price        Int // rupiah
+  quota        Int
+  reserved     Int      @default(0) // dipesan, belum lunas
+  sold         Int      @default(0) // sudah lunas
+  saleStartsAt DateTime @map("sale_starts_at") @db.Timestamptz(6)
+  saleEndsAt   DateTime @map("sale_ends_at") @db.Timestamptz(6)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event      Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+
+  @@index([eventId])
+  @@map("ticket_types")
+}
+
+model Order {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code          String      @unique
+  userId        String      @map("user_id") @db.Uuid
+  status        OrderStatus @default(PENDING)
+  subtotal      Int
+  serviceFee    Int         @map("service_fee")
+  total         Int
+  buyerName     String      @map("buyer_name")
+  buyerGender   String      @map("buyer_gender")
+  buyerWhatsapp String      @map("buyer_whatsapp")
+  buyerEmail    String      @map("buyer_email")
+  expiresAt     DateTime    @map("expires_at") @db.Timestamptz(6)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items   OrderItem[]
+  payment Payment?
+
+  @@index([userId, createdAt])
+  @@index([status, expiresAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                 String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId            String @map("order_id") @db.Uuid
+  ticketTypeId       String @map("ticket_type_id") @db.Uuid
+  ticketNameSnapshot String @map("ticket_name_snapshot")
+  unitPriceSnapshot  Int    @map("unit_price_snapshot")
+  quantity           Int
+
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+  tickets    Ticket[]
+
+  @@index([orderId])
+  @@index([ticketTypeId])
+  @@map("order_items")
+}
+
+// ───────────── PEMBAYARAN ─────────────
+
+model PaymentMethod {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code          String          @unique // bri, bca, qris, dana, ...
+  name          String
+  category      PaymentCategory
+  accountNumber String          @map("account_number")
+  accountName   String?         @map("account_name")
+  isActive      Boolean         @default(true) @map("is_active")
+  sortOrder     Int             @default(0) @map("sort_order")
+
+  payments Payment[]
+
+  @@map("payment_methods")
+}
+
+model Payment {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId         String        @unique @map("order_id") @db.Uuid
+  paymentMethodId String        @map("payment_method_id") @db.Uuid
+  amount          Int
+  status          PaymentStatus @default(PENDING)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order         Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  method        PaymentMethod         @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  proofs        PaymentProof[]
+  verifications PaymentVerification[]
+
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model PaymentProof {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId   String   @map("payment_id") @db.Uuid
+  storagePath String   @map("storage_path") // bucket privat payment-proofs
+  mimeType    String   @map("mime_type")
+  sizeBytes   Int      @map("size_bytes")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@map("payment_proofs")
+}
+
+model PaymentVerification {
+  id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId String               @map("payment_id") @db.Uuid
+  adminId   String               @map("admin_id") @db.Uuid
+  decision  VerificationDecision
+  note      String?
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  admin   User    @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@map("payment_verifications")
+}
+
+// ───────────── E-TICKET ─────────────
+
+model Ticket {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderItemId String       @map("order_item_id") @db.Uuid
+  eventId     String       @map("event_id") @db.Uuid // memudahkan cek wewenang check-in
+  ownerId     String       @map("owner_id") @db.Uuid
+  code        String       @unique // kode pendek yang tampil di UI
+  qrToken     String       @unique @map("qr_token") // acak, isi QR
+  status      TicketStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  orderItem OrderItem        @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  event     Event            @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  owner     User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  checkin   TicketCheckin?
+
+  @@index([ownerId])
+  @@index([eventId])
+  @@index([orderItemId])
+  @@map("tickets")
+}
+
+model TicketCheckin {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId    String   @unique @map("ticket_id") @db.Uuid // UNIQUE = cegah double check-in
+  checkedBy   String   @map("checked_by") @db.Uuid
+  checkedInAt DateTime @default(now()) @map("checked_in_at") @db.Timestamptz(6)
+
+  ticket  Ticket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  checker User   @relation(fields: [checkedBy], references: [id], onDelete: Restrict)
+
+  @@map("ticket_checkins")
+}
+
+// ───────────── NOTIFIKASI & SISTEM ─────────────
+
+model Notification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  title     String
+  body      String
+  url       String?
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model OutboxEvent {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        String
+  payload     Json
+  dedupKey    String       @unique @map("dedup_key")
+  status      OutboxStatus @default(PENDING)
+  attempts    Int          @default(0)
+  availableAt DateTime     @default(now()) @map("available_at") @db.Timestamptz(6)
+  processedAt DateTime?    @map("processed_at") @db.Timestamptz(6)
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([status, availableAt])
+  @@map("outbox_events")
+}
+
+model ContactMessage {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  email     String
+  subject   String
+  message   String
+  status    ContactStatus @default(NEW)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
+}
+
+model AuditLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId   String?  @map("actor_id") @db.Uuid
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

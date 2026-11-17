@@ -1,36 +1,20 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { eventsData } from '@/lib/eventsData';
+import { useRouter } from 'next/navigation';
+import { useApiData } from '@/lib/useApiData';
 import { EmptyState, StatusAlert } from '@/components/shared/UIStates';
 import { PaymentBrandLogo } from '@/components/shared/PaymentLogo';
 
-const SERVICE_FEE = 7000;
-
-const EWALLET_OPTIONS = [
-  { id: 'qris', name: 'QRIS' },
-  { id: 'shopeepay', name: 'ShopeePay' },
-  { id: 'ovo', name: 'OVO' },
-  { id: 'dana', name: 'DANA' },
-  { id: 'linkaja', name: 'LinkAja' },
-];
-
-const BANK_OPTIONS = [
-  { id: 'bri', name: 'BRI' },
-  { id: 'cimb', name: 'CIMB NIAGA' },
-  { id: 'bni', name: 'BNI' },
-  { id: 'bca', name: 'BCA' },
-  { id: 'mandiri', name: 'Mandiri' },
-  { id: 'bsi', name: 'BSI' },
-  { id: 'btn', name: 'BTN' },
-  { id: 'danamon', name: 'Danamon' },
-];
-
 function PaymentContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const eventIdParam = searchParams.get('eventId') || '1';
+
+  // Metode pembayaran & biaya layanan dari server (tabel payment_methods)
+  const { data: methodsData, error: methodsError } = useApiData('/api/payment-methods');
+  const SERVICE_FEE = methodsData?.serviceFee ?? 0;
+  const methodOptions = methodsData?.items ?? [];
+  const EWALLET_OPTIONS = methodOptions.filter((m) => m.category === 'ewallet');
+  const BANK_OPTIONS = methodOptions.filter((m) => m.category === 'bank');
 
   const [orderSummary, setOrderSummary] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -44,61 +28,22 @@ function PaymentContent() {
   const [errorMessage, setErrorMessage] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Pilihan tiket disimpan sementara di sessionStorage oleh halaman detail event.
+  // Ini hanya keranjang di sisi klien: harga dan stok TIDAK dipercaya, server menghitung ulang saat pesanan dibuat.
   useEffect(() => {
-    const matchedEvent = eventsData.find((ev) => ev.id === eventIdParam);
-
     try {
       const savedRaw = sessionStorage.getItem('gigspace_checkout');
       if (savedRaw) {
         const parsed = JSON.parse(savedRaw);
         if (parsed && parsed.items?.length > 0) {
-          setOrderSummary({
-            ...parsed,
-            dateLabel: matchedEvent?.dateLabel || 'Kamis, 12 November 2026',
-            timeLabel: matchedEvent?.timeLabel || '16:30 WIB',
-            location: matchedEvent?.location || 'JIExpo Kemayoran, Jakarta Pusat',
-            image:
-              matchedEvent?.image ||
-              'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop',
-          });
-          setIsLoaded(true);
-          return;
+          setOrderSummary(parsed);
         }
       }
     } catch {
-      // Fallback jika sessionStorage kosong
+      // Abaikan jika sessionStorage tidak terbaca
     }
-
-    if (matchedEvent) {
-      const defaultItems = matchedEvent.ticketCategories
-        .filter((t) => t.status === 'on_sale')
-        .slice(0, 2)
-        .map((t) => ({
-          id: t.id,
-          name: t.name,
-          price: t.price,
-          quantity: 1,
-        }));
-
-      const subtotal = defaultItems.reduce(
-        (sum, item) => sum + item.price * item.quantity,
-        0
-      );
-
-      setOrderSummary({
-        eventId: matchedEvent.id,
-        eventTitle: matchedEvent.title,
-        dateLabel: matchedEvent.dateLabel,
-        timeLabel: matchedEvent.timeLabel,
-        location: matchedEvent.location,
-        image: matchedEvent.image,
-        items: defaultItems,
-        subtotal,
-      });
-    }
-
     setIsLoaded(true);
-  }, [eventIdParam]);
+  }, []);
 
   const formatRupiah = (amount) => {
     return new Intl.NumberFormat('id-ID', {
@@ -114,7 +59,7 @@ function PaymentContent() {
     return formatRupiah(amount).replace(/\s/g, '');
   };
 
-  const handlePayNow = (e) => {
+  const handlePayNow = async (e) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -132,20 +77,47 @@ function PaymentContent() {
       return;
     }
 
+    if (!orderSummary.buyer) {
+      setErrorMessage('Data pemesan belum diisi. Silakan kembali ke langkah sebelumnya.');
+      return;
+    }
+
+    if (isProcessing) return;
     setIsProcessing(true);
 
-    const finalOrder = {
-      ...orderSummary,
-      serviceFee: SERVICE_FEE,
-      totalPay: (orderSummary.subtotal || 0) + SERVICE_FEE,
-      paymentMethod: selectedMethod,
-      createdAt: new Date().toISOString(),
-    };
-    sessionStorage.setItem('gigspace_checkout', JSON.stringify(finalOrder));
+    try {
+      // Hanya mengirim pilihan (tiket, jumlah, pemesan, metode). Harga & total dihitung server.
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventSlug: orderSummary.eventId,
+          items: orderSummary.items.map((item) => ({
+            ticketTypeId: item.id,
+            quantity: item.quantity,
+          })),
+          buyer: orderSummary.buyer,
+          paymentMethodCode: selectedMethod.id,
+        }),
+      });
+      const json = await res.json().catch(() => null);
 
-    setTimeout(() => {
-      router.push(`/checkout/instruction?eventId=${orderSummary.eventId}`);
-    }, 400);
+      if (res.status === 401) {
+        setErrorMessage('Silakan login terlebih dahulu untuk menyelesaikan pesanan.');
+        setIsProcessing(false);
+        router.push('/auth');
+        return;
+      }
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Gagal membuat pesanan. Silakan coba lagi.');
+      }
+
+      sessionStorage.removeItem('gigspace_checkout');
+      router.push(`/checkout/instruction?order=${encodeURIComponent(json.data.order.code)}`);
+    } catch (err) {
+      setErrorMessage(err.message || 'Terjadi gangguan jaringan.');
+      setIsProcessing(false);
+    }
   };
 
   if (!isLoaded) {
@@ -195,8 +167,8 @@ function PaymentContent() {
           </p>
         </div>
 
-        {errorMessage && (
-          <StatusAlert type="error" message={errorMessage} />
+        {(errorMessage || methodsError) && (
+          <StatusAlert type="error" message={errorMessage || methodsError} />
         )}
 
         <form
