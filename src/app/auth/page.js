@@ -6,6 +6,13 @@ import { useAuth } from '@/context/AuthContext';
 import Link from 'next/link';
 import { StatusAlert } from '@/components/shared/UIStates';
 
+// Tombol Fast Login (mode demo). Tampil hanya bila NEXT_PUBLIC_ENABLE_FAST_LOGIN=true.
+const FAST_LOGIN_ROLES = [
+  { key: 'user', label: 'User' },
+  { key: 'organizer', label: 'Organizer' },
+  { key: 'admin', label: 'Admin' },
+];
+
 export default function AuthPage() {
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState('');
@@ -32,6 +39,28 @@ export default function AuthPage() {
     }
     return () => clearInterval(timer);
   }, [step, countdown]);
+
+  // Fast Login: masuk langsung sebagai salah satu peran demo (tanpa OTP)
+  const handleFastLogin = async (role) => {
+    setStatus({ type: '', message: '' });
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/fast-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Fast login gagal.');
+      }
+      await login();
+      router.push('/');
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Fast login gagal.' });
+      setIsSubmitting(false);
+    }
+  };
 
   // Step 1: Kirim OTP ke Email
   const handleEmailSubmit = async (e) => {
@@ -235,6 +264,31 @@ export default function AuthPage() {
                   )}
                 </button>
               </form>
+
+              {process.env.NEXT_PUBLIC_ENABLE_FAST_LOGIN === 'true' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <span className="flex-1 h-px bg-gray-200" />
+                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">
+                      Fast Login (Demo)
+                    </span>
+                    <span className="flex-1 h-px bg-gray-200" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {FAST_LOGIN_ROLES.map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => handleFastLogin(item.key)}
+                        className="py-2 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 hover:border-[#FF2E9A] hover:text-[#FF2E9A] disabled:opacity-60 transition cursor-pointer"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

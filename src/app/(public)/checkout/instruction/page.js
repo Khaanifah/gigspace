@@ -130,9 +130,17 @@ function InstructionContent() {
   const [previewUrl, setPreviewUrl] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isValidProof, setIsValidProof] = useState(false);
+  const [proofUploaded, setIsValidProof] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Status bukti mengikuti data server, jadi tetap benar setelah halaman dimuat ulang.
+  const proofDone =
+    proofUploaded || ['UNDER_REVIEW', 'APPROVED'].includes(orderSummary?.paymentStatus);
+  const rejectionMessage =
+    orderSummary?.paymentStatus === 'REJECTED' && !proofUploaded
+      ? `Pembayaran ditolak admin${orderSummary.rejectionNote ? `: ${orderSummary.rejectionNote}` : '.'} Silakan unggah bukti yang benar.`
+      : '';
 
   useEffect(() => {
     return () => {
@@ -194,7 +202,7 @@ function InstructionContent() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleVerifyProof = () => {
+  const handleVerifyProof = async () => {
     setErrorMessage('');
 
     if (!uploadedFile) {
@@ -205,10 +213,26 @@ function InstructionContent() {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    try {
+      // File dikirim ke server; server memeriksa isi file, menyimpannya di storage privat,
+      // lalu mengubah status pembayaran menjadi "menunggu verifikasi admin".
+      const formData = new FormData();
+      formData.append('file', uploadedFile);
+      const res = await fetch(
+        `/api/orders/${encodeURIComponent(orderSummary.code)}/payment-proof`,
+        { method: 'POST', body: formData }
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Gagal mengunggah bukti pembayaran.');
+      }
       setIsValidProof(true);
-    }, 500);
+      reload();
+    } catch (err) {
+      setErrorMessage(err.message || 'Terjadi gangguan jaringan.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isLoaded) {
@@ -409,7 +433,7 @@ function InstructionContent() {
               </div>
 
               {/* Indikator Bukti Valid setelah berhasil dikonfirmasi */}
-              {isValidProof && (
+              {proofDone && (
                 <span className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full text-xs font-extrabold bg-[#E3F9E5] text-[#2E9E5B] border border-[#9AE6B4]">
                   <span>✓</span>
                   <span>Bukti Valid</span>
@@ -418,8 +442,8 @@ function InstructionContent() {
             </div>
 
             {/* Alert Error jika format salah / belum upload */}
-            {errorMessage && (
-              <StatusAlert type="error" message={errorMessage} />
+            {(errorMessage || rejectionMessage) && (
+              <StatusAlert type="error" message={errorMessage || rejectionMessage} />
             )}
 
             {/* Inner White Dropzone Box */}
@@ -457,7 +481,7 @@ function InstructionContent() {
                   <p className="text-xs font-bold text-[#1C1C1C] truncate max-w-xs">
                     {uploadedFile?.name}
                   </p>
-                  {!isValidProof && (
+                  {!proofDone && (
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
@@ -511,14 +535,14 @@ function InstructionContent() {
             {/* Baris Bawah: Teks Status "Bukti Valid" + Button Aksi */}
             <div className="pt-1 flex items-center justify-between gap-4">
               <div>
-                {isValidProof && (
+                {proofDone && (
                   <p className="text-xs sm:text-sm font-extrabold text-[#2E9E5B]">
-                    Bukti Valid
+                    Bukti terkirim, menunggu verifikasi admin
                   </p>
                 )}
               </div>
 
-              {isValidProof ? (
+              {proofDone ? (
                 /* Setelah Valid -> Tombol berubah menjadi "Cek Tiket Saya" dan mengarah ke /my-tickets */
                 <button
                   type="button"
@@ -535,7 +559,7 @@ function InstructionContent() {
                   onClick={handleVerifyProof}
                   className="bg-[#FF2E9A] text-white text-xs font-bold px-7 py-2.5 rounded-md hover:bg-pink-600 disabled:opacity-45 disabled:cursor-not-allowed transition shadow-xs cursor-pointer"
                 >
-                  {isSubmitting ? 'Memverifikasi...' : 'Konfirmasi Pembayaran'}
+                  {isSubmitting ? 'Mengunggah...' : 'Konfirmasi Pembayaran'}
                 </button>
               )}
             </div>

@@ -16,7 +16,7 @@ const orderInclude = {
     orderBy: { ticketNameSnapshot: 'asc' },
     include: { ticketType: { include: { event: { include: { venue: true } } } } },
   },
-  payment: { include: { method: true } },
+  payment: { include: { method: true, verifications: { orderBy: { createdAt: 'desc' }, take: 1 } } },
 };
 
 // Bentuk respons disesuaikan dengan field yang sudah dipakai halaman checkout di frontend.
@@ -53,6 +53,8 @@ function toOrderView(order) {
       email: order.buyerEmail,
     },
     paymentStatus: order.payment?.status ?? null,
+    rejectionNote:
+      order.payment?.status === 'REJECTED' ? (order.payment.verifications?.[0]?.note ?? null) : null,
     paymentMethod: method
       ? {
           id: method.code,
@@ -90,7 +92,12 @@ async function releaseOrder(orderId, newStatus) {
 // Pesanan yang bukti bayarnya sedang diperiksa admin TIDAK ikut kedaluwarsa.
 export async function expireOverdueOrders(limit = 50) {
   const overdue = await prisma.order.findMany({
-    where: { status: 'PENDING', expiresAt: { lt: new Date() }, payment: { is: { status: 'PENDING' } } },
+    where: {
+      status: 'PENDING',
+      expiresAt: { lt: new Date() },
+      // Pembayaran yang sedang diperiksa (UNDER_REVIEW) tidak ikut kedaluwarsa; yang ditolak tetap bisa kedaluwarsa.
+      payment: { is: { status: { in: ['PENDING', 'REJECTED'] } } },
+    },
     select: { id: true },
     take: limit,
   });
@@ -208,6 +215,12 @@ export async function createOrder(user, input, log) {
   throw new AppError('ORDER_FAILED', 'Gagal membuat pesanan.', 500);
 }
 
+// Mengambil pesanan MILIK pengguna (kode atau UUID). Pesanan orang lain dianggap tidak ada.
+export async function findOwnedOrderRecord(user, idOrCode, include = {}) {
+  const where = UUID_RE.test(idOrCode) ? { id: idOrCode } : { code: idOrCode.toUpperCase() };
+  return prisma.order.findFirst({ where: { ...where, userId: user.id }, include });
+}
+
 // Hanya pemilik yang bisa melihat. Pesanan milik orang lain dijawab 404 (bukan 403)
 // supaya keberadaannya tidak bocor (cegah IDOR).
 export async function getOrder(user, idOrCode) {
@@ -243,7 +256,7 @@ export async function cancelOrder(user, idOrCode, log) {
   if (order.status !== 'PENDING') {
     throw new AppError('ORDER_NOT_CANCELLABLE', 'Pesanan ini tidak dapat dibatalkan.', 409);
   }
-  if (order.payment && order.payment.status !== 'PENDING') {
+  if (order.payment && !['PENDING', 'REJECTED'].includes(order.payment.status)) {
     throw new AppError('ORDER_NOT_CANCELLABLE', 'Pembayaran sedang diperiksa, pesanan tidak dapat dibatalkan.', 409);
   }
   const released = await releaseOrder(order.id, 'CANCELLED');
