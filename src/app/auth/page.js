@@ -1,377 +1,448 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '@/context/AuthContext';
 import Link from 'next/link';
-import { StatusAlert } from '@/components/shared/UIStates';
+import { createBrowserClient } from '@supabase/ssr';
 
-// Tombol Fast Login (mode demo). Tampil hanya bila NEXT_PUBLIC_ENABLE_FAST_LOGIN=true.
-const FAST_LOGIN_ROLES = [
-  { key: 'user', label: 'User' },
-  { key: 'organizer', label: 'Organizer' },
-  { key: 'admin', label: 'Admin' },
+const ROLES = [
+  {
+    id: 'user',
+    label: 'User',
+    redirectTo: '/',
+    icon: (
+      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'organizer',
+    label: 'Organizer',
+    redirectTo: '/organizer',
+    icon: (
+      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="17" rx="2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16 2v4M8 2v4M3 10h18" />
+      </svg>
+    ),
+  },
+  {
+    id: 'admin',
+    label: 'Admin',
+    redirectTo: '/admin/curation',
+    icon: (
+      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      </svg>
+    ),
+  },
 ];
 
 export default function AuthPage() {
-  const [step, setStep] = useState(1);
+  const otpRefs = useRef([]);
+
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
+
+  // Step state: 'role' | 'email' | 'otp'
+  const [step, setStep] = useState('role');
+  const [selectedRole, setSelectedRole] = useState(null);
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState(['', '', '', '', '', '']);
-  const [countdown, setCountdown] = useState(55);
-  const [canResend, setCanResend] = useState(false);
+  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
 
-  // State UI: Loading, Error, Success
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [status, setStatus] = useState({ type: '', message: '' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
 
-  const router = useRouter();
-  const { login } = useAuth();
-  const otpInputsRef = useRef([]);
-
+  // Timer hitung mundur kirim ulang OTP
   useEffect(() => {
-    let timer;
-    if (step === 2 && countdown > 0) {
-      timer = setInterval(() => {
-        setCountdown((prev) => prev - 1);
-      }, 1000);
-    } else if (countdown === 0) {
-      setCanResend(true);
-    }
-    return () => clearInterval(timer);
-  }, [step, countdown]);
+    if (resendCooldown <= 0) return;
+    const timer = setTimeout(() => setResendCooldown((prev) => prev - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
 
-  // Fast Login: masuk langsung sebagai salah satu peran demo (tanpa OTP)
-  const handleFastLogin = async (role) => {
-    setStatus({ type: '', message: '' });
-    setIsSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/fast-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || !json?.success) {
-        throw new Error(json?.message || 'Fast login gagal.');
-      }
-      await login();
-      router.push('/');
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message || 'Fast login gagal.' });
-      setIsSubmitting(false);
-    }
-  };
+  // STEP 2 -> KIRIM OTP KE EMAIL VIA SUPABASE
+  const handleSendOtp = async (e) => {
+    e?.preventDefault();
+    setErrorMessage('');
+    setInfoMessage('');
 
-  // Step 1: Kirim OTP ke Email
-  const handleEmailSubmit = async (e) => {
-    e.preventDefault();
-    setStatus({ type: '', message: '' });
-
-    if (!email.trim()) {
-      setStatus({ type: 'error', message: 'Alamat email wajib diisi.' });
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Harap masukkan alamat email yang valid.');
       return;
     }
 
-    setIsSubmitting(true);
+    setIsLoading(true);
     try {
-      // Siap diganti langsung dengan: await supabase.auth.signInWithOtp({ email })
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+      const { error } = await supabase.auth.signInWithOtp({
+        email: cleanEmail,
+        options: {
+          shouldCreateUser: true,
+          data: {
+            role: selectedRole.id,
+          },
+        },
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || 'Gagal mengirim kode OTP ke email.');
+      if (error) {
+        setErrorMessage(error.message || 'Gagal mengirim kode OTP. Coba lagi.');
+        return;
       }
 
-      setStep(2);
-      setCountdown(55);
-      setCanResend(false);
-      setStatus({
-        type: 'success',
-        message: 'Kode OTP berhasil dikirim! Silakan cek kotak masuk atau folder spam email Anda.',
-      });
-    } catch (err) {
-      setStatus({
-        type: 'error',
-        message: err.message || 'Terjadi gangguan jaringan saat mengirim OTP.',
-      });
+      setOtpDigits(['', '', '', '', '', '']);
+      setResendCooldown(60);
+      setStep('otp');
+      setInfoMessage(`Kode verifikasi 6 digit telah dikirim ke ${cleanEmail}.`);
+    } catch {
+      setErrorMessage('Terjadi kesalahan jaringan saat mengirim OTP.');
     } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
     }
   };
 
-  // Kirim Ulang OTP
-  const handleResendOtp = async () => {
-    if (!canResend || isSubmitting) return;
-    setIsSubmitting(true);
-    setStatus({ type: '', message: '' });
-
-    try {
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-
-      if (!res.ok) throw new Error('Gagal mengirim ulang kode OTP.');
-
-      setCountdown(55);
-      setCanResend(false);
-      setOtp(['', '', '', '', '', '']);
-      otpInputsRef.current[0]?.focus();
-      setStatus({ type: 'success', message: 'Kode OTP baru telah dikirim ke email Anda.' });
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
+  // Handler ketik per kotak OTP (6 digit)
   const handleOtpChange = (index, value) => {
-    if (isNaN(value)) return;
-    const newOtp = [...otp];
-    newOtp[index] = value;
-    setOtp(newOtp);
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const updated = [...otpDigits];
+    updated[index] = digit;
+    setOtpDigits(updated);
 
-    if (value && index < 5) {
-      otpInputsRef.current[index + 1]?.focus();
+    if (digit && index < 5) {
+      otpRefs.current[index + 1]?.focus();
     }
   };
 
-  const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      otpInputsRef.current[index - 1]?.focus();
+  // Handler Backspace & Paste 6 digit OTP sekaligus
+  const handleOtpKeyDown = (index, e) => {
+    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
+      otpRefs.current[index - 1]?.focus();
     }
   };
 
-  // Step 2: Verifikasi OTP
-  const handleOtpSubmit = async (e) => {
+  const handleOtpPaste = (e) => {
     e.preventDefault();
-    setStatus({ type: '', message: '' });
+    const pasted = e.clipboardData
+      .getData('text')
+      .replace(/\D/g, '')
+      .slice(0, 6);
+    if (!pasted) return;
 
-    const token = otp.join('');
+    const updated = ['', '', '', '', '', ''];
+    pasted.split('').forEach((char, idx) => {
+      updated[idx] = char;
+    });
+    setOtpDigits(updated);
+
+    const nextFocusIdx = Math.min(pasted.length, 5);
+    otpRefs.current[nextFocusIdx]?.focus();
+  };
+
+  // STEP 3 -> VERIFIKASI OTP KE SUPABASE & REDIRECT PENUH
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setErrorMessage('');
+    setInfoMessage('');
+
+    const token = otpDigits.join('');
     if (token.length < 6) {
-      setStatus({ type: 'error', message: 'Masukkan 6 digit kode OTP secara lengkap.' });
+      setErrorMessage('Masukkan 6 digit kode OTP yang dikirim ke email Anda.');
       return;
     }
 
-    setIsSubmitting(true);
+    setIsLoading(true);
     try {
-      // Siap diganti langsung dengan: await supabase.auth.verifyOtp({ email, token, type: 'email' })
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, token }),
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token,
+        type: 'email',
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || 'Kode OTP tidak valid atau sudah kedaluwarsa.');
+      if (error) {
+        setErrorMessage('Kode OTP tidak valid atau sudah kedaluwarsa. Silakan coba lagi.');
+        return;
       }
 
-      setStatus({ type: 'success', message: 'Verifikasi berhasil! Mengalihkan ke beranda...' });
-      login(email);
-      setTimeout(() => router.push('/'), 800);
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message });
+      // 1. Simpan role ke user metadata Supabase & cookie agar proxy/server mengenalinya
+      if (data?.user && selectedRole?.id) {
+        await supabase.auth.updateUser({
+          data: { role: selectedRole.id },
+        });
+
+        document.cookie = `gigspace_role=${selectedRole.id}; path=/; max-age=86400; SameSite=Lax`;
+      }
+
+      // 2. Simpan info sesi ringan di sessionStorage untuk kebutuhan UI
+      sessionStorage.setItem(
+        'gigspace_session',
+        JSON.stringify({
+          userId: data?.user?.id,
+          role: selectedRole.id,
+          roleLabel: selectedRole.label,
+          email: email.trim(),
+          loggedInAt: new Date().toISOString(),
+        })
+      );
+
+      // 3. Redirect penuh agar cookie sesi Supabase & role langsung terbaca server
+      window.location.href = selectedRole.redirectTo;
+    } catch {
+      setErrorMessage('Terjadi kesalahan saat memverifikasi kode OTP.');
     } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen grid grid-cols-1 md:grid-cols-2 bg-white font-sans">
+    <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2 font-sans">
       
-      {/* SISI KIRI: Branding Visual */}
-      <div className="relative hidden md:flex flex-col items-center justify-center bg-[#1C1C1C] overflow-hidden p-12">
-        <div className="absolute -top-24 -left-24 w-96 h-96 bg-[#FF2E9A]/30 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-[#5D00FF]/30 rounded-full blur-3xl pointer-events-none" />
+      {/* SISI KIRI: BRANDING VISUAL GELAP */}
+      <div className="relative bg-[#141414] flex flex-col items-center justify-center p-8 overflow-hidden min-h-[260px] lg:min-h-screen">
+        <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-[#FF2E9A]/20 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -right-24 w-96 h-96 rounded-full bg-[#5D00FF]/25 blur-3xl pointer-events-none" />
 
-        <div className="relative z-10 text-center space-y-4">
-          <img
-            src="/logo.png"
-            alt="Gigspace"
-            className="h-16 mx-auto object-contain drop-shadow-[0_0_20px_rgba(255,46,154,0.5)]"
-          />
-          <p className="text-gray-400 text-xs font-semibold tracking-widest uppercase">
-            Discover Local Music Scene Around You
+        <div className="relative z-10 flex flex-col items-center text-center space-y-4">
+          <Link href="/">
+            <img
+              src="/logo.png"
+              alt="Gigspace Logo"
+              className="h-14 sm:h-16 md:h-20 w-auto object-contain"
+            />
+          </Link>
+          <p className="text-[11px] sm:text-xs font-bold text-white/90 tracking-[0.22em] uppercase">
+            DISCOVER LOCAL MUSIC SCENE AROUND YOU
           </p>
         </div>
       </div>
 
-      {/* SISI KANAN: Form Action */}
-      <div className="flex flex-col justify-center items-center px-6 md:px-16 py-12 relative">
+      {/* SISI KANAN */}
+      <div className="bg-white relative flex flex-col justify-center p-6 sm:p-12">
         
-        <Link
-          href="/"
-          className="absolute top-6 left-6 text-xs font-bold text-gray-500 hover:text-[#FF2E9A] flex items-center gap-2 group transition"
-        >
-          <img
-            src="/icons/back.png"
-            alt="Back Icon"
-            className="w-4 h-4 object-contain opacity-70 group-hover:opacity-100 group-hover:-translate-x-0.5 transition-all"
-          />
-          <span>Kembali ke Home</span>
-        </Link>
+        {/* SATU TOMBOL BACK DINAMIS DI POJOK KIRI ATAS */}
+        <div className="absolute top-6 left-6 sm:top-8 sm:left-10">
+          {step === 'role' && (
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#FF2E9A] hover:opacity-80 group transition"
+            >
+              <img
+                src="/icons/back.png"
+                alt="Back Icon"
+                className="w-4 h-4 object-contain group-hover:-translate-x-0.5 transition-transform"
+              />
+              <span>Kembali ke Home</span>
+            </Link>
+          )}
 
-        <div className="w-full max-w-sm space-y-6">
-          <div className="md:hidden text-center mb-6">
-            <img src="/logo.png" alt="Gigspace" className="h-10 mx-auto object-contain" />
-          </div>
+          {step === 'email' && (
+            <button
+              type="button"
+              onClick={() => {
+                setStep('role');
+                setSelectedRole(null);
+                setErrorMessage('');
+              }}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#FF2E9A] hover:opacity-80 group transition cursor-pointer"
+            >
+              <img
+                src="/icons/back.png"
+                alt="Back Icon"
+                className="w-4 h-4 object-contain group-hover:-translate-x-0.5 transition-transform"
+              />
+              <span>Kembali Pilih Role</span>
+            </button>
+          )}
 
-          {/* ALERT SUCCESS / ERROR */}
-          <StatusAlert type={status.type} message={status.message} />
+          {step === 'otp' && (
+            <button
+              type="button"
+              onClick={() => {
+                setStep('email');
+                setErrorMessage('');
+                setInfoMessage('');
+              }}
+              className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#FF2E9A] hover:opacity-80 group transition cursor-pointer"
+            >
+              <img
+                src="/icons/back.png"
+                alt="Back Icon"
+                className="w-4 h-4 object-contain group-hover:-translate-x-0.5 transition-transform"
+              />
+              <span>Ubah Email</span>
+            </button>
+          )}
+        </div>
 
-          {/* STEP 1: FORM INPUT EMAIL */}
-          {step === 1 && (
-            <div className="space-y-6">
-              <div>
-                <h1 className="text-2xl font-black text-[#1C1C1C]">Selamat datang!</h1>
-                <p className="text-xs text-gray-500 mt-1">
-                  Silakan masukkan email Anda untuk melanjutkan.
+        <div className="w-full max-w-md mx-auto space-y-7 pt-8 sm:pt-0">
+          
+          {/* STEP 1: PILIH ROLE */}
+          {step === 'role' && (
+            <>
+              <div className="space-y-1.5">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1C1C1C] tracking-tight">
+                  Selamat datang!
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-500">
+                  Pilih role akun Anda terlebih dahulu untuk melanjutkan.
                 </p>
               </div>
 
-              <form onSubmit={handleEmailSubmit} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-gray-600">Email</label>
+              <div className="space-y-3.5">
+                {ROLES.map((role) => (
+                  <button
+                    key={role.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRole(role);
+                      setErrorMessage('');
+                      setStep('email');
+                    }}
+                    className="w-full px-5 py-4 rounded-2xl border border-pink-100 bg-[#FFF9FC] hover:bg-[#FF2E9A] hover:border-[#FF2E9A] text-[#1C1C1C] hover:text-white shadow-2xs hover:shadow-md transition-all duration-200 flex items-center gap-4 group cursor-pointer"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-[#FFF0F6] text-[#FF2E9A] group-hover:bg-white/20 group-hover:text-white flex items-center justify-center transition-colors flex-shrink-0">
+                      {role.icon}
+                    </div>
+                    <span className="text-sm sm:text-base font-extrabold tracking-wide">
+                      {role.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* STEP 2: MASUKKAN EMAIL */}
+          {step === 'email' && (
+            <>
+              <div className="space-y-1.5">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1C1C1C] tracking-tight">
+                  Masukkan Email Anda
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-500">
+                  Kami akan mengirimkan kode verifikasi OTP ke email Anda.
+                </p>
+              </div>
+
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-600">
+                  {errorMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleSendOtp} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="auth-email"
+                    className="block text-xs font-bold text-[#1C1C1C]"
+                  >
+                    Email
+                  </label>
                   <input
+                    id="auth-email"
                     type="email"
                     required
-                    disabled={isSubmitting}
+                    autoFocus
                     placeholder="nama@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/50 focus:border-[#FF2E9A] disabled:bg-gray-100 disabled:text-gray-400"
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm text-[#1C1C1C] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/40 focus:border-[#FF2E9A]"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="w-full bg-[#FF2E9A] text-white py-2.5 rounded-lg text-sm font-bold hover:bg-pink-600 disabled:opacity-60 transition flex items-center justify-center gap-2 shadow-md shadow-pink-200 cursor-pointer"
+                  disabled={isLoading}
+                  className="w-full bg-[#FF2E9A] hover:bg-pink-600 disabled:opacity-60 text-white text-sm font-bold py-3 rounded-xl transition shadow-xs cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Mengirim OTP...</span>
-                    </>
-                  ) : (
-                    <span>Lanjutkan →</span>
-                  )}
+                  {isLoading ? 'Mengirim Kode OTP...' : 'Kirim Kode OTP'}
                 </button>
               </form>
-
-              {process.env.NEXT_PUBLIC_ENABLE_FAST_LOGIN === 'true' && (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <span className="flex-1 h-px bg-gray-200" />
-                    <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">
-                      Fast Login (Demo)
-                    </span>
-                    <span className="flex-1 h-px bg-gray-200" />
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {FAST_LOGIN_ROLES.map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        disabled={isSubmitting}
-                        onClick={() => handleFastLogin(item.key)}
-                        className="py-2 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 hover:border-[#FF2E9A] hover:text-[#FF2E9A] disabled:opacity-60 transition cursor-pointer"
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            </>
           )}
 
-          {/* STEP 2: VERIFIKASI KODE OTP */}
-          {step === 2 && (
-            <div className="space-y-6">
-              <div>
-                <h1 className="text-2xl font-black text-[#1C1C1C]">Masukkan kode OTP</h1>
-                <p className="text-xs text-gray-500 mt-1">
-                  Silakan periksa email Anda. Kode OTP telah dikirim ke{' '}
-                  <span className="font-bold text-[#FF2E9A]">{email}</span>
+          {/* STEP 3: VERIFIKASI 6-DIGIT KODE OTP */}
+          {step === 'otp' && (
+            <>
+              <div className="space-y-1.5">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1C1C1C] tracking-tight">
+                  Verifikasi Kode OTP
+                </h1>
+                <p className="text-xs sm:text-sm text-gray-500">
+                  Masukkan 6 digit kode yang telah dikirim ke{' '}
+                  <span className="font-bold text-[#1C1C1C]">{email}</span>
                 </p>
               </div>
 
-              <form onSubmit={handleOtpSubmit} className="space-y-6">
-                <div className="flex justify-between gap-2">
-                  {otp.map((digit, index) => (
+              {infoMessage && (
+                <div className="p-3 rounded-xl bg-[#FFF0F6] border border-pink-200 text-xs font-semibold text-[#FF2E9A]">
+                  {infoMessage}
+                </div>
+              )}
+
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-600">
+                  {errorMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleVerifyOtp} className="space-y-5">
+                {/* 6 Kotak Input Digit OTP */}
+                <div
+                  onPaste={handleOtpPaste}
+                  className="grid grid-cols-6 gap-2 sm:gap-3"
+                >
+                  {otpDigits.map((digit, idx) => (
                     <input
-                      key={index}
-                      ref={(el) => (otpInputsRef.current[index] = el)}
+                      key={idx}
+                      ref={(el) => (otpRefs.current[idx] = el)}
                       type="text"
+                      inputMode="numeric"
                       maxLength={1}
-                      disabled={isSubmitting}
+                      autoFocus={idx === 0}
                       value={digit}
-                      onChange={(e) => handleOtpChange(index, e.target.value)}
-                      onKeyDown={(e) => handleKeyDown(index, e)}
-                      className="w-11 h-12 text-center text-lg font-bold border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#FF2E9A] focus:border-[#FF2E9A] bg-gray-50 disabled:opacity-50"
+                      onChange={(e) => handleOtpChange(idx, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                      className="h-12 sm:h-14 w-full text-center text-lg sm:text-xl font-black text-[#FF2E9A] rounded-xl border border-gray-200 bg-[#FFF9FC] focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/40 focus:border-[#FF2E9A]"
                     />
                   ))}
                 </div>
 
-                <div className="text-center">
-                  {canResend ? (
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={handleResendOtp}
-                      className="text-xs font-bold text-[#FF2E9A] hover:underline disabled:opacity-50 cursor-pointer"
-                    >
-                      Kirim Ulang Kode OTP
-                    </button>
-                  ) : (
-                    <p className="text-[11px] text-gray-400">
-                      Belum menerima kode OTP?{' '}
-                      <span className="font-bold text-[#FF2E9A]">{countdown} detik</span> untuk mengirim ulang
-                    </p>
-                  )}
-                </div>
-
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="w-full bg-[#FF2E9A] text-white py-2.5 rounded-lg text-sm font-bold hover:bg-pink-600 disabled:opacity-60 transition flex items-center justify-center gap-2 shadow-md shadow-pink-200 cursor-pointer"
+                  disabled={isLoading}
+                  className="w-full bg-[#FF2E9A] hover:bg-pink-600 disabled:opacity-60 text-white text-sm font-bold py-3 rounded-xl transition shadow-xs cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Memverifikasi...</span>
-                    </>
-                  ) : (
-                    <span>Masuk →</span>
-                  )}
+                  {isLoading ? 'Memverifikasi...' : 'Verifikasi & Masuk'}
                 </button>
 
-                <button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={() => {
-                    setStep(1);
-                    setOtp(['', '', '', '', '', '']);
-                    setStatus({ type: '', message: '' });
-                  }}
-                  className="w-full text-center text-xs font-semibold text-gray-400 hover:text-gray-600 cursor-pointer"
-                >
-                  Ubah Email
-                </button>
+                {/* Tombol Kirim Ulang OTP */}
+                <div className="text-center text-xs text-gray-500">
+                  Tidak menerima kode?{' '}
+                  {resendCooldown > 0 ? (
+                    <span className="font-bold text-gray-400">
+                      Kirim ulang dalam {resendCooldown}d
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={handleSendOtp}
+                      className="font-extrabold text-[#FF2E9A] hover:underline cursor-pointer"
+                    >
+                      Kirim Ulang OTP
+                    </button>
+                  )}
+                </div>
               </form>
-            </div>
+            </>
           )}
 
         </div>
       </div>
-
     </div>
   );
 }

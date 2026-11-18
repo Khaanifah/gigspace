@@ -3,9 +3,9 @@ import Footer from '@/components/shared/Footer';
 
 export default function PublicLayout({ children }) {
   return (
-    <div className="flex flex-col min-h-screen" suppressHydrationWarning>
+    <div className="flex flex-col min-h-screen">
       <Navbar />
-      <div className="flex-1" suppressHydrationWarning>
+      <div className="flex-1">
         {children}
       </div>
       <Footer />
