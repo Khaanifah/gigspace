@@ -2,11 +2,16 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { EmptyState } from '@/components/shared/UIStates';
-import { ticketsData, getTicketStatus } from '@/lib/ticketsData';
+import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
+import { getTicketStatus } from '@/lib/ticketStatus';
+import { useApiData } from '@/lib/useApiData';
 
 export default function MyTicketsPage() {
   const router = useRouter();
+
+  // Tiket milik pengguna yang login, dari GET /api/tickets
+  const { data, error, status, isLoading, reload } = useApiData('/api/tickets?pageSize=50');
+  const ticketsData = data?.items ?? [];
 
   return (
     <div className="bg-[#FAF8ED] min-h-screen text-[#1C1C1C] pb-20 font-sans">
@@ -28,7 +33,18 @@ export default function MyTicketsPage() {
 
         {/* BAGIAN 2: LIST TIKET YANG DIPESAN */}
         <section className="space-y-4">
-          {ticketsData.length === 0 ? (
+          {isLoading ? (
+            <GigsGridSkeleton count={4} />
+          ) : status === 401 ? (
+            <EmptyState
+              title="Silakan login terlebih dahulu"
+              description="Login untuk melihat tiket yang sudah kamu beli."
+              actionLabel="Login"
+              onAction={() => router.push('/auth')}
+            />
+          ) : error ? (
+            <ErrorState message={error} onRetry={reload} />
+          ) : ticketsData.length === 0 ? (
             <EmptyState
               title="Belum ada tiket yang dipesan"
               description="Tiket konser yang kamu beli akan muncul di sini beserta kode QR untuk akses masuk ke venue."

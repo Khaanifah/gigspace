@@ -3,15 +3,48 @@
 import { useState, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ticketsData } from '@/lib/ticketsData';
-import { EmptyState } from '@/components/shared/UIStates';
+import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
+import { useApiData } from '@/lib/useApiData';
 
 export default function TicketDetailPage({ params }) {
   const resolvedParams = use(params);
   const router = useRouter();
   const [activeQrItem, setActiveQrItem] = useState(null);
 
-  const order = ticketsData.find((item) => item.id === resolvedParams.id);
+  // [id] = kode pesanan; data dari GET /api/tickets/[id]
+  const { data, error, status, isLoading, reload } = useApiData(
+    `/api/tickets/${encodeURIComponent(resolvedParams.id)}`
+  );
+  const order = data?.order ?? null;
+
+  if (isLoading) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <GigsGridSkeleton count={2} />
+      </div>
+    );
+  }
+
+  if (status === 401) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <EmptyState
+          title="Silakan login terlebih dahulu"
+          description="Login untuk melihat e-ticket milikmu."
+          actionLabel="Login"
+          onAction={() => router.push('/auth')}
+        />
+      </div>
+    );
+  }
+
+  if (error && status !== 404) {
+    return (
+      <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+        <ErrorState message={error} onRetry={reload} />
+      </div>
+    );
+  }
 
   if (!order) {
     return (
@@ -121,9 +154,7 @@ export default function TicketDetailPage({ params }) {
                   className="bg-white p-2 rounded-lg border border-pink-200 hover:border-[#FF2E9A] hover:scale-105 transition shadow-xs cursor-pointer"
                 >
                   <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
-                      ticketItem.ticketCode
-                    )}`}
+                    src={`/api/tickets/${encodeURIComponent(ticketItem.ticketCode)}/qr`}
                     alt={`QR ${ticketItem.ticketCode}`}
                     className="w-20 h-20 sm:w-24 sm:h-24 object-contain"
                   />
@@ -173,9 +204,7 @@ export default function TicketDetailPage({ params }) {
             <div className="bg-[#FFF0F6] border-2 border-[#FF2E9A] p-5 inline-flex flex-col items-center justify-center mx-auto">
               <div className="bg-white p-2">
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
-                    activeQrItem.ticketCode
-                  )}`}
+                  src={`/api/tickets/${encodeURIComponent(activeQrItem.ticketCode)}/qr`}
                   alt={`QR Code ${activeQrItem.ticketCode}`}
                   className="w-44 h-44 sm:w-48 sm:h-48 object-contain"
                 />
