@@ -1,58 +1,119 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { initialPaymentsData } from '@/lib/adminData';
-import { EmptyState, StatusAlert } from '@/components/shared/UIStates';
+import { useApiData } from '@/lib/useApiData';
+import { EmptyState, ErrorState, StatusAlert } from '@/components/shared/UIStates';
 import { exportToExcel } from '@/lib/exportExcel';
 
+const TAB_STATUS = {
+  'Menunggu Verifikasi': 'UNDER_REVIEW',
+  Lunas: 'APPROVED',
+  Ditolak: 'REJECTED',
+};
+
+const STATUS_LABEL = {
+  UNDER_REVIEW: 'Menunggu Verifikasi',
+  APPROVED: 'Lunas',
+  REJECTED: 'Ditolak',
+};
+
+// Mengubah data API ke bentuk yang dipakai tabel dan modal di halaman ini.
+function toRow(p) {
+  return {
+    id: p.orderCode,
+    paymentId: p.id,
+    submittedAt: p.submittedAt
+      ? new Date(p.submittedAt).toLocaleString('id-ID', {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+          timeZone: 'Asia/Jakarta',
+        })
+      : '-',
+    buyerName: p.buyerName,
+    buyerEmail: p.buyerEmail,
+    eventTitle: p.eventTitle,
+    ticketSummary: p.ticketSummary,
+    paymentMethod: p.method,
+    totalAmount: p.amount,
+    status: STATUS_LABEL[p.status] ?? p.status,
+  };
+}
+
 export default function AdminPaymentsPage() {
-  const [paymentsList, setPaymentsList] = useState(initialPaymentsData);
   const [activeTab, setActiveTab] = useState('Semua'); // 'Semua' | 'Menunggu Verifikasi' | 'Lunas' | 'Ditolak'
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTrx, setSelectedTrx] = useState(null);
   const [isZoomed, setIsZoomed] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [rejectReason, setRejectReason] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  // Hitung statistik KPI secara dinamis
-  const stats = useMemo(() => {
-    return {
-      pending: paymentsList.filter((item) => item.status === 'Menunggu Verifikasi').length,
-      paid: paymentsList.filter((item) => item.status === 'Lunas').length,
-      rejected: paymentsList.filter((item) => item.status === 'Ditolak').length,
-    };
-  }, [paymentsList]);
+  // Daftar dari database (hanya pembayaran yang sudah punya bukti); tab difilter di server
+  const listParams = new URLSearchParams({ pageSize: '50', submitted: 'true' });
+  if (TAB_STATUS[activeTab]) listParams.set('status', TAB_STATUS[activeTab]);
+  const { data, error, isLoading, reload } = useApiData(`/api/admin/payments?${listParams.toString()}`);
+  const paymentsList = useMemo(() => (data?.items ?? []).map(toRow), [data]);
 
-  // Filter berdasarkan Tab & Search
+  // Detail (termasuk URL bukti bertanda tangan berumur pendek) dimuat saat modal dibuka
+  const { data: detailData } = useApiData(
+    selectedTrx ? `/api/admin/payments/${selectedTrx.paymentId}` : null
+  );
+  const proofUrl = detailData?.payment?.proofs?.[0]?.url ?? null;
+
+  // KPI dari server (jumlah per status)
+  const stats = {
+    pending: data?.counts?.UNDER_REVIEW ?? 0,
+    paid: data?.counts?.APPROVED ?? 0,
+    rejected: data?.counts?.REJECTED ?? 0,
+  };
+
+  // Pencarian pada data yang sudah dimuat
   const filteredList = useMemo(() => {
-    return paymentsList.filter((item) => {
-      const matchesTab =
-        activeTab === 'Semua' ? true : item.status === activeTab;
-
-      const q = searchQuery.toLowerCase();
-      const matchesSearch =
+    const q = searchQuery.toLowerCase();
+    return paymentsList.filter(
+      (item) =>
         item.id.toLowerCase().includes(q) ||
         item.buyerName.toLowerCase().includes(q) ||
-        item.eventTitle.toLowerCase().includes(q);
-
-      return matchesTab && matchesSearch;
-    });
-  }, [paymentsList, activeTab, searchQuery]);
-
-  // Aksi Konfirmasi Lunas & Tolak Bukti
-  const handleVerifyPayment = (trxId, newStatus) => {
-    setPaymentsList((prev) =>
-      prev.map((item) =>
-        item.id === trxId ? { ...item, status: newStatus } : item
-      )
+        item.eventTitle.toLowerCase().includes(q)
     );
-    setSelectedTrx(null);
-    setIsZoomed(false);
-    setFeedbackMessage(
-      newStatus === 'Lunas'
-        ? `Transaksi ${trxId} berhasil dikonfirmasi Lunas. E-Ticket otomatis diterbitkan ke pembeli.`
-        : `Bukti pembayaran untuk transaksi ${trxId} telah ditolak.`
-    );
-    setTimeout(() => setFeedbackMessage(''), 4000);
+  }, [paymentsList, searchQuery]);
+
+  // Aksi Konfirmasi Lunas & Tolak Bukti: memanggil API; semua perubahan data dilakukan server
+  const handleVerifyPayment = async (trx, decision) => {
+    setActionError('');
+    if (decision === 'reject' && rejectReason.trim().length < 3) {
+      setActionError('Isi alasan penolakan (minimal 3 karakter).');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = await fetch(`/api/admin/payments/${trx.paymentId}/${decision}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(decision === 'reject' ? { note: rejectReason.trim() } : {}),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Gagal memproses pembayaran.');
+      }
+
+      setSelectedTrx(null);
+      setIsZoomed(false);
+      setRejectReason('');
+      setFeedbackMessage(
+        decision === 'approve'
+          ? `Transaksi ${trx.id} berhasil dikonfirmasi Lunas. ${json.data.tickets} E-Ticket diterbitkan ke pembeli.`
+          : `Bukti pembayaran untuk transaksi ${trx.id} telah ditolak.`
+      );
+      setTimeout(() => setFeedbackMessage(''), 4000);
+      reload();
+    } catch (err) {
+      setActionError(err.message || 'Gagal memproses pembayaran.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // Export ke Excel
@@ -203,7 +264,11 @@ export default function AdminPaymentsPage() {
       </div>
 
       {/* TABEL TRANSAKSI TERTUNDA */}
-      {filteredList.length === 0 ? (
+      {isLoading ? (
+        <p className="text-sm text-gray-400">Memuat transaksi...</p>
+      ) : error ? (
+        <ErrorState message={error} onRetry={reload} />
+      ) : filteredList.length === 0 ? (
         <EmptyState
           title="Tidak ada transaksi ditemukan"
           description="Belum ada transaksi pembayaran yang sesuai dengan filter atau pencarian saat ini."
@@ -226,6 +291,8 @@ export default function AdminPaymentsPage() {
                   key={trx.id}
                   onClick={() => {
                     setSelectedTrx(trx);
+                    setRejectReason('');
+                    setActionError('');
                     setIsZoomed(false);
                   }}
                   title="Klik untuk mengecek foto bukti transfer"
@@ -310,7 +377,7 @@ export default function AdminPaymentsPage() {
 
               <div className="flex-1 flex items-center justify-center overflow-auto rounded-xl bg-black/50 p-2">
                 <img
-                  src={selectedTrx.proofImage}
+                  src={proofUrl ?? undefined}
                   alt={`Bukti Transfer ${selectedTrx.id}`}
                   onClick={() => setIsZoomed((prev) => !prev)}
                   className={`rounded-lg transition-transform duration-200 cursor-zoom-in ${
@@ -381,22 +448,41 @@ export default function AdminPaymentsPage() {
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-pink-100 flex items-center justify-end gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => handleVerifyPayment(selectedTrx.id, 'Ditolak')}
-                  className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
-                >
-                  Tolak Bukti
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleVerifyPayment(selectedTrx.id, 'Lunas')}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
-                >
-                  Konfirmasi Lunas
-                </button>
-              </div>
+              {selectedTrx.status === 'Menunggu Verifikasi' && (
+                <div className="pt-3 border-t border-pink-100 space-y-3">
+                  {actionError && (
+                    <p className="text-xs font-semibold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                      {actionError}
+                    </p>
+                  )}
+                  <textarea
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    placeholder="Alasan penolakan (wajib diisi bila menolak bukti)"
+                    className="w-full px-3 py-2 rounded-lg border border-pink-100 bg-[#FFF9FC] text-xs text-[#1C1C1C] placeholder-pink-300 focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/40 resize-none"
+                  />
+                  <div className="flex items-center justify-end gap-2.5">
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => handleVerifyPayment(selectedTrx, 'reject')}
+                      className="bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs font-bold px-4 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                    >
+                      Tolak Bukti
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => handleVerifyPayment(selectedTrx, 'approve')}
+                      className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold px-5 py-2.5 rounded-lg transition shadow-xs cursor-pointer"
+                    >
+                      {isProcessing ? 'Memproses...' : 'Konfirmasi Lunas'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

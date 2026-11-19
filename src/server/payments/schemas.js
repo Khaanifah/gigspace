@@ -15,5 +15,7 @@ export const listPaymentsSchema = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(10),
   status: z.enum(['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED']).optional(),
+  // true = hanya pembayaran yang sudah punya bukti (UNDER_REVIEW, APPROVED, REJECTED)
+  submitted: z.enum(['true', 'false']).optional().transform((v) => v === 'true'),
   q: z.string().trim().min(1).max(100).optional(),
 });

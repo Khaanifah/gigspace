@@ -93,9 +93,9 @@ export async function getOrderPayment(user, idOrCode) {
 
 // ───────────── SISI ADMIN ─────────────
 
-export async function listPayments({ page, pageSize, status, q }) {
+export async function listPayments({ page, pageSize, status, submitted, q }) {
   const where = {
-    ...(status ? { status } : {}),
+    ...(status ? { status } : submitted ? { status: { not: 'PENDING' } } : {}),
     ...(q
       ? {
           OR: [
@@ -107,28 +107,34 @@ export async function listPayments({ page, pageSize, status, q }) {
       : {}),
   };
 
-  const [total, rows] = await Promise.all([
+  const [total, rows, grouped] = await Promise.all([
     prisma.payment.count({ where }),
     prisma.payment.findMany({
       where,
       include: {
         method: true,
         proofs: { orderBy: { uploadedAt: 'desc' }, take: 1 },
-        order: { include: { items: { take: 1, include: { ticketType: { include: { event: { select: { title: true } } } } } } } },
+        order: { include: { items: { orderBy: { ticketNameSnapshot: 'asc' }, include: { ticketType: { include: { event: { select: { title: true } } } } } } } },
       },
       orderBy: { createdAt: 'desc' },
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
+    prisma.payment.groupBy({ by: ['status'], _count: { _all: true } }), // jumlah per status, tidak terpengaruh filter
   ]);
 
+  const counts = { PENDING: 0, UNDER_REVIEW: 0, APPROVED: 0, REJECTED: 0 };
+  for (const g of grouped) counts[g.status] = g._count._all;
+
   return {
+    counts,
     items: rows.map((p) => ({
       id: p.id,
       orderCode: p.order.code,
       buyerName: p.order.buyerName,
       buyerEmail: p.order.buyerEmail,
       eventTitle: p.order.items[0]?.ticketType.event.title ?? '',
+      ticketSummary: p.order.items.map((i) => `${i.ticketNameSnapshot} x${i.quantity}`).join(', '),
       method: p.method.name,
       amount: p.amount,
       status: p.status,
