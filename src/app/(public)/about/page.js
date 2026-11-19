@@ -9,11 +9,11 @@ const alurPemesanan = [
 ];
 
 const alurKerjasama = [
-  'Hubungi kami melalui email dengan subjek "kerjasama"',
-  'Cantumkan proposal pada email',
+  'Buka halaman Contact Us',
+  'Pilih subjek "Kerjasama" pada formulir',
+  'Cantumkan tautan proposal pada pesan',
   'Tunggu konfirmasi dari pihak kami',
-  'Metode pembayaran',
-  'Bayar',
+  'Mulai bekerja sama',
 ];
 
 export default function AboutPage() {

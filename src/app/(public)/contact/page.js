@@ -42,17 +42,32 @@ export default function ContactPage() {
       return;
     }
 
+    // Validasi lapis 1 (frontend); server memvalidasi ulang.
+    if (formData.name.trim().length < 2) {
+      setStatus({ type: 'error', message: 'Nama minimal 2 karakter.' });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      setStatus({ type: 'error', message: 'Format email tidak valid.' });
+      return;
+    }
+    if (formData.message.trim().length < 10) {
+      setStatus({ type: 'error', message: 'Pesan minimal 10 karakter.' });
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      // Endpoint API untuk meneruskan pesan ke email contact@gigspace.co.id
+      // Pesan disimpan ke database lewat POST /api/contact dan admin diberi notifikasi
       const res = await fetch('/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
 
-      if (!res.ok) {
-        throw new Error('Gagal mengirim pesan. Silakan coba beberapa saat lagi.');
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Gagal mengirim pesan. Silakan coba beberapa saat lagi.');
       }
 
       setStatus({
@@ -60,10 +75,13 @@ export default function ContactPage() {
         message: 'Pesan Anda berhasil dikirim! Tim Gigspace akan segera menghubungi Anda melalui email.',
       });
       setFormData({ name: '', email: '', subject: '', message: '' });
-    } catch {
+    } catch (err) {
       setStatus({
         type: 'error',
-        message: 'Terjadi kesalahan saat mengirim pesan. Silakan periksa koneksi Anda dan coba lagi.',
+        message:
+          err instanceof TypeError
+            ? 'Terjadi kesalahan saat mengirim pesan. Silakan periksa koneksi Anda dan coba lagi.'
+            : err.message,
       });
     } finally {
       setIsSubmitting(false);

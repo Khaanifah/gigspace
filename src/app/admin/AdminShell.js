@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { label: 'Antrean Kurasi', href: '/admin/curation' },
   { label: 'Verifikasi Pembayaran', href: '/admin/payments' },
   { label: 'Manajemen Pengguna', href: '/admin/users' },
+  { label: 'Pesan Kontak', href: '/admin/contact' },
 ];
 
 export default function AdminShell({ children }) {
