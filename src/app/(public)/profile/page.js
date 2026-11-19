@@ -1,52 +1,34 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { createBrowserClient } from '@supabase/ssr';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
 
 export default function UserProfilePage() {
   const fileInputRef = useRef(null);
   const [isSavedToast, setIsSavedToast] = useState(false);
 
-  const [fullName, setFullName] = useState('Honey');
-  const [email, setEmail] = useState('itsnaankhaanifaah@gmail.com');
-  const [phone, setPhone] = useState('823 2951 7662');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [avatarPreview, setAvatarPreview] = useState(null);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
+  const router = useRouter();
+  const { user, isLoading, login, logout } = useAuth();
+  const [saveError, setSaveError] = useState('');
 
-  // Sinkronkan data email & nama dari sesi login aktif
+  // Belum login -> ke halaman login (status login berasal dari server)
   useEffect(() => {
-    const syncUser = async () => {
-      try {
-        const saved = sessionStorage.getItem('gigspace_session');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed?.email) {
-            setEmail(parsed.email);
-            if (parsed?.name) setFullName(parsed.name);
-          }
-        }
-      } catch {
-        // Abaikan
-      }
+    if (!isLoading && !user) router.replace('/auth');
+  }, [isLoading, user, router]);
 
-      const { data } = await supabase.auth.getUser();
-      if (data?.user) {
-        if (data.user.email) setEmail(data.user.email);
-        if (data.user.user_metadata?.full_name) {
-          setFullName(data.user.user_metadata.full_name);
-        }
-        if (data.user.user_metadata?.phone) {
-          setPhone(data.user.user_metadata.phone);
-        }
-      }
-    };
-
-    syncUser();
-  }, [supabase]);
+  // Isi form dari profil di tabel users (database), bukan dari data bawaan
+  useEffect(() => {
+    if (!user) return;
+    setEmail(user.email);
+    setFullName(user.fullName ?? '');
+    setPhone(user.whatsapp ? user.whatsapp.replace(/^\+?62/, '') : '');
+  }, [user]);
 
   // Ganti Foto Profil (Preview Lokal)
   const handleAvatarUpload = (e) => {
@@ -60,44 +42,40 @@ export default function UserProfilePage() {
   // Simpan Perubahan Profil ke Supabase Metadata
   const handleSaveProfile = async (e) => {
     e.preventDefault();
+    setSaveError('');
+    setIsSavedToast(false);
+
+    // Hanya kirim field yang terisi; server memvalidasi ulang.
+    const payload = {};
+    if (fullName.trim()) payload.fullName = fullName.trim();
+    const digits = phone.replace(/\D/g, '').replace(/^(0|62)/, '');
+    if (digits) payload.whatsapp = `+62${digits}`;
+
     try {
-      await supabase.auth.updateUser({
-        data: {
-          full_name: fullName,
-          phone,
-        },
+      const res = await fetch('/api/users/me', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
-    } catch {
-      // Tetap lanjutkan pembaruan lokal
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.message || 'Gagal menyimpan profil.');
+      }
+      await login(); // muat ulang profil dari server
+      setIsSavedToast(true);
+      setTimeout(() => setIsSavedToast(false), 3000);
+    } catch (err) {
+      setSaveError(err.message || 'Gagal menyimpan profil.');
     }
-
-    try {
-      const saved = JSON.parse(sessionStorage.getItem('gigspace_session') || '{}');
-      sessionStorage.setItem(
-        'gigspace_session',
-        JSON.stringify({ ...saved, name: fullName, email })
-      );
-    } catch {
-      // Abaikan
-    }
-
-    setIsSavedToast(true);
-    setTimeout(() => setIsSavedToast(false), 3000);
   };
 
   // Logout User
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // Abaikan
-    }
-    document.cookie = 'gigspace_role=; path=/; max-age=0; SameSite=Lax';
-    sessionStorage.removeItem('gigspace_session');
+    await logout();
     window.location.href = '/';
   };
 
-  const initialLetter = fullName?.trim().charAt(0).toUpperCase() || 'H';
+  const initialLetter = fullName?.trim().charAt(0).toUpperCase() || email.charAt(0).toUpperCase() || 'G';
 
   return (
     <main className="min-h-screen bg-[#F5F6F8] py-6 sm:py-10 px-4 sm:px-6 lg:px-8 font-sans">
@@ -198,6 +176,11 @@ export default function UserProfilePage() {
               {isSavedToast && (
                 <span className="text-[11px] sm:text-xs font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full">
                   Perubahan berhasil disimpan!
+                </span>
+              )}
+              {saveError && (
+                <span className="text-[11px] sm:text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 px-3 py-1 rounded-full">
+                  {saveError}
                 </span>
               )}
             </div>

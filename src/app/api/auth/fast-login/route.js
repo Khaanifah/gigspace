@@ -6,6 +6,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getSessionUser, toPublicUser } from '@/server/auth/session';
 import { FAST_LOGIN_ACCOUNTS, FAST_LOGIN_KEYS } from '@/server/auth/fast-login';
+import { redirectForRole } from '@/server/auth/doors';
 
 const schema = z.strictObject({
   role: z.enum(FAST_LOGIN_KEYS, { error: 'Peran tidak dikenal.' }),
@@ -67,5 +68,5 @@ export const POST = route('auth.fast-login', async (request, _ctx, { log }) => {
   }
 
   log.warn({ role: target.role, userId: user.id }, 'FAST LOGIN dipakai');
-  return ok({ user: toPublicUser(user) }, `Masuk sebagai ${target.role}.`);
+  return ok({ user: toPublicUser(user), redirectTo: redirectForRole(user.role) }, `Masuk sebagai ${target.role}.`);
 });

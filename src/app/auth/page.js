@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
-import { createBrowserClient } from '@supabase/ssr';
 
 const ROLES = [
   {
@@ -42,11 +41,6 @@ const ROLES = [
 export default function AuthPage() {
   const otpRefs = useRef([]);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-
   // Step state: 'role' | 'email' | 'otp'
   const [step, setStep] = useState('role');
   const [selectedRole, setSelectedRole] = useState(null);
@@ -79,18 +73,16 @@ export default function AuthPage() {
 
     setIsLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: cleanEmail,
-        options: {
-          shouldCreateUser: true,
-          data: {
-            role: selectedRole.id,
-          },
-        },
+      // Lewat backend kita (validasi Zod, pembatasan laju, log), bukan langsung ke Supabase
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: cleanEmail }),
       });
+      const json = await res.json().catch(() => null);
 
-      if (error) {
-        setErrorMessage(error.message || 'Gagal mengirim kode OTP. Coba lagi.');
+      if (!res.ok || !json?.success) {
+        setErrorMessage(json?.message || 'Gagal mengirim kode OTP. Coba lagi.');
         return;
       }
 
@@ -156,46 +148,82 @@ export default function AuthPage() {
 
     setIsLoading(true);
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token,
-        type: 'email',
+      // Server memverifikasi OTP, menulis cookie sesi, lalu mencocokkan pintu dengan role di database.
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), token, door: selectedRole?.id ?? 'user' }),
       });
+      const json = await res.json().catch(() => null);
 
-      if (error) {
-        setErrorMessage('Kode OTP tidak valid atau sudah kedaluwarsa. Silakan coba lagi.');
+      if (!res.ok || !json?.success) {
+        setErrorMessage(json?.message || 'Kode OTP tidak valid atau sudah kedaluwarsa. Silakan coba lagi.');
         return;
       }
 
-      // 1. Simpan role ke user metadata Supabase & cookie agar proxy/server mengenalinya
-      if (data?.user && selectedRole?.id) {
-        await supabase.auth.updateUser({
-          data: { role: selectedRole.id },
-        });
-
-        document.cookie = `gigspace_role=${selectedRole.id}; path=/; max-age=86400; SameSite=Lax`;
-      }
-
-      // 2. Simpan info sesi ringan di sessionStorage untuk kebutuhan UI
-      sessionStorage.setItem(
-        'gigspace_session',
-        JSON.stringify({
-          userId: data?.user?.id,
-          role: selectedRole.id,
-          roleLabel: selectedRole.label,
-          email: email.trim(),
-          loggedInAt: new Date().toISOString(),
-        })
-      );
-
-      // 3. Redirect penuh agar cookie sesi Supabase & role langsung terbaca server
-      window.location.href = selectedRole.redirectTo;
+      // Redirect penuh agar cookie sesi langsung terbaca server
+      window.location.href = json.data.redirectTo || selectedRole?.redirectTo || '/';
     } catch {
       setErrorMessage('Terjadi kesalahan saat memverifikasi kode OTP.');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Fast Login (demo): masuk langsung sebagai salah satu role tanpa OTP; role tetap ditentukan server.
+  const handleFastLogin = async (roleId) => {
+    setErrorMessage('');
+    setInfoMessage('');
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/auth/fast-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: roleId }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        setErrorMessage(json?.message || 'Fast login gagal.');
+        return;
+      }
+      window.location.href = json.data.redirectTo || '/';
+    } catch {
+      setErrorMessage('Terjadi kesalahan jaringan saat fast login.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fastLoginPanel =
+    process.env.NEXT_PUBLIC_ENABLE_FAST_LOGIN === 'true' ? (
+      <div className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="flex-1 h-px bg-gray-200" />
+          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">
+            Fast Login (Demo)
+          </span>
+          <span className="flex-1 h-px bg-gray-200" />
+        </div>
+        {step === 'role' && errorMessage && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-600">
+            {errorMessage}
+          </div>
+        )}
+        <div className="grid grid-cols-3 gap-2">
+          {ROLES.map((role) => (
+            <button
+              key={role.id}
+              type="button"
+              disabled={isLoading}
+              onClick={() => handleFastLogin(role.id)}
+              className="py-2 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 hover:border-[#FF2E9A] hover:text-[#FF2E9A] disabled:opacity-60 transition cursor-pointer"
+            >
+              {role.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
 
   return (
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-2 font-sans">
@@ -312,6 +340,8 @@ export default function AuthPage() {
                   </button>
                 ))}
               </div>
+
+              {fastLoginPanel}
             </>
           )}
 
@@ -361,6 +391,8 @@ export default function AuthPage() {
                   {isLoading ? 'Mengirim Kode OTP...' : 'Kirim Kode OTP'}
                 </button>
               </form>
+
+              {fastLoginPanel}
             </>
           )}
 

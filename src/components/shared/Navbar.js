@@ -1,60 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { createBrowserClient } from '@supabase/ssr';
 
 export default function Navbar() {
-  const authContext = useAuth();
-  const [supabaseUser, setSupabaseUser] = useState(null);
+  const { user, isLoggedIn, userEmail } = useAuth();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-
-  // Sinkronkan status login dari Supabase Auth & sessionStorage
-  useEffect(() => {
-    const checkSession = async () => {
-      try {
-        const saved = sessionStorage.getItem('gigspace_session');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed?.email) {
-            setSupabaseUser({
-              email: parsed.email,
-              name: parsed.name || parsed.email.split('@')[0],
-              avatarUrl: parsed.avatarUrl || null,
-            });
-            return;
-          }
-        }
-      } catch {
-        // Abaikan
-      }
-
-      const { data } = await supabase.auth.getUser();
-      if (data?.user) {
-        setSupabaseUser({
-          email: data.user.email,
-          name:
-            data.user.user_metadata?.full_name ||
-            data.user.email?.split('@')[0] ||
-            'User',
-          avatarUrl: data.user.user_metadata?.avatar_url || null,
-        });
-      }
-    };
-
-    checkSession();
-  }, [supabase]);
-
-  const activeLoggedIn = Boolean(authContext?.isLoggedIn || supabaseUser);
-  const activeEmail = authContext?.userEmail || supabaseUser?.email || '';
-  const activeName = supabaseUser?.name || activeEmail;
-  const activeAvatar = supabaseUser?.avatarUrl || null;
+  // Status login berasal dari server (cookie sesi), bukan sessionStorage atau role dari browser
+  const activeLoggedIn = Boolean(isLoggedIn);
+  const activeEmail = userEmail || '';
+  const activeName = user?.fullName || activeEmail;
+  const activeAvatar = null;
 
   return (
     <header className="bg-[#1C1C1C] text-white sticky top-0 z-50 border-b border-gray-800">

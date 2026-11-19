@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DOOR_KEYS } from '@/server/auth/doors';
 
 const email = z
   .string({ error: 'Alamat email wajib diisi.' })
@@ -11,6 +12,8 @@ export const sendOtpSchema = z.strictObject({ email });
 
 export const verifyOtpSchema = z.strictObject({
   email,
+  // Pintu yang dipilih di layar login; dicocokkan dengan role di database, bukan dipercaya.
+  door: z.enum(DOOR_KEYS, { error: 'Pintu login tidak dikenal.' }).default('user'),
   token: z
     .string({ error: 'Kode OTP wajib diisi.' })
     .trim()
