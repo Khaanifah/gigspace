@@ -3,8 +3,8 @@ import { rateLimit, clientIp } from '@/server/rate-limit';
 import { registerSchema } from '@/server/auth/schemas';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
-const SENT_MESSAGE =
-  'Jika email belum terdaftar, kode verifikasi telah dikirim. Jika sudah terdaftar, silakan masuk atau gunakan Lupa Password.';
+const SENT_MESSAGE = 'Kode verifikasi telah dikirim ke email Anda.';
+const ALREADY_REGISTERED_MESSAGE = 'Akun Anda sudah terdaftar. Silakan masuk atau gunakan Lupa Password.';
 
 export const POST = route('auth.register', async (request, _ctx, { log }) => {
   const { fullName, email, password } = await parseJson(request, registerSchema);
@@ -29,9 +29,17 @@ export const POST = route('auth.register', async (request, _ctx, { log }) => {
       throw new AppError('RATE_LIMITED', 'Batas pengiriman email tercapai. Coba lagi beberapa saat lagi.', 429);
     }
     if (error.code === 'user_already_exists' || error.code === 'email_exists') {
-      return ok({ next: 'verify' }, SENT_MESSAGE, 201); // respons sama: tidak membocorkan akun yang sudah ada
+      throw new AppError('EMAIL_ALREADY_REGISTERED', ALREADY_REGISTERED_MESSAGE, 409);
     }
     throw new AppError('REGISTER_FAILED', 'Pendaftaran gagal. Silakan coba lagi.', 502);
+  }
+
+  // Saat konfirmasi email AKTIF, Supabase tidak mengembalikan error untuk email yang sudah
+  // terverifikasi; ia memberi user samaran dengan identities kosong. Ini penanda akun sudah ada.
+  // (Email yang terdaftar tapi belum diverifikasi punya identities terisi: Supabase mengirim ulang
+  // kode, jadi alurnya tetap ke langkah verifikasi.)
+  if (Array.isArray(data.user?.identities) && data.user.identities.length === 0) {
+    throw new AppError('EMAIL_ALREADY_REGISTERED', ALREADY_REGISTERED_MESSAGE, 409);
   }
 
   // Bila konfirmasi email dimatikan di Supabase, sesi langsung terbentuk: arahkan ke login biasa.
