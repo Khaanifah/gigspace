@@ -9,6 +9,9 @@ import {
 } from '@/server/config';
 import { dateLabel, timeLabel, publicImageUrl } from '@/server/events/format';
 
+// Bawaan Prisma hanya 5 detik; di hosting yang jauh dari database, belasan query berurutan bisa melewatinya.
+const TX_OPTIONS = { timeout: 15_000, maxWait: 10_000 };
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const orderInclude = {
@@ -85,7 +88,7 @@ async function releaseOrder(orderId, newStatus) {
       });
     }
     return true;
-  });
+  }, TX_OPTIONS);
 }
 
 // Pesanan kedaluwarsa dilepas secara "lazy" setiap ada aktivitas order.
@@ -204,7 +207,7 @@ export async function createOrder(user, input, log) {
           },
           include: orderInclude,
         });
-      });
+      }, TX_OPTIONS);
       log?.info({ orderId: created.id, code: created.code, total }, 'pesanan dibuat');
       return { order: toOrderView(created), duplicate: false };
     } catch (err) {

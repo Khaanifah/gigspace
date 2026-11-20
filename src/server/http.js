@@ -22,7 +22,7 @@ export function failResponse(code, message, status, fields) {
   return NextResponse.json({ success: false, message, error }, { status });
 }
 
-function errorResponse(err, log) {
+function errorResponse(err, log, requestId) {
   if (err instanceof ZodError) {
     const fields = err.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
     log.warn({ code: 'VALIDATION_ERROR', fields }, 'validasi gagal');
@@ -34,7 +34,9 @@ function errorResponse(err, log) {
   }
   // Error tak terduga: detail hanya ke log server, pengguna hanya melihat pesan umum.
   log.error({ err, code: 'INTERNAL_ERROR' }, 'error tak terduga');
-  return failResponse('INTERNAL_ERROR', 'Terjadi kesalahan pada server. Silakan coba lagi.', 500);
+  // Kode referensi = 8 karakter pertama requestId; cocokkan dengan field requestId di log server.
+  const ref = requestId ? ` (Kode: ${requestId.slice(0, 8)})` : '';
+  return failResponse('INTERNAL_ERROR', `Terjadi kesalahan pada server. Silakan coba lagi.${ref}`, 500);
 }
 
 // Pertahanan CSRF dasar: browser selalu mengirim header Origin pada POST lintas-situs.
@@ -71,7 +73,7 @@ export function route(name, handler) {
       assertSameOrigin(request);
       response = await handler(request, context, { log, requestId });
     } catch (err) {
-      response = errorResponse(err, log);
+      response = errorResponse(err, log, requestId);
     }
 
     response.headers.set('x-request-id', requestId);
