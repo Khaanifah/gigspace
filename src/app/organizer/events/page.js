@@ -1,19 +1,39 @@
 import Link from 'next/link';
-import { prisma } from '@/lib/prisma';
 import { getSessionUser } from '@/server/auth/session';
-import { getNormalizedOrganizerEvents } from '@/lib/organizerEventsHelper';
+import { listOrganizerEvents } from '@/server/organizer/events-service';
+
+// Status database -> kunci tampilan (DRAFT dianggap Pending; Selesai/Dibatalkan hanya tampil di "Semua").
+const STATUS_KEY = { PUBLISHED: 'ACTIVE', PENDING_REVIEW: 'PENDING', DRAFT: 'PENDING' };
 
 const STATUS_BADGE = {
   PENDING: 'bg-amber-100 text-amber-800 border-amber-200',
   ACTIVE: 'bg-emerald-100 text-emerald-700 border-emerald-200',
   REJECTED: 'bg-rose-100 text-rose-700 border-rose-200',
+  COMPLETED: 'bg-gray-100 text-gray-600 border-gray-200',
+  CANCELLED: 'bg-gray-100 text-gray-500 border-gray-200',
 };
 
 const STATUS_LABEL = {
   PENDING: 'Pending',
   ACTIVE: 'Active',
   REJECTED: 'Rejected',
+  COMPLETED: 'Selesai',
+  CANCELLED: 'Dibatalkan',
 };
+
+function formatDate(date) {
+  return new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Jakarta',
+  })
+    .format(date)
+    .replace('.', ':') + ' WIB';
+}
 
 function formatRupiah(amount) {
   return new Intl.NumberFormat('id-ID', {
@@ -30,35 +50,20 @@ export default async function OrganizerEventsPage({ searchParams }) {
   const activeFilter = String(resolvedParams?.status || 'ALL').toUpperCase();
 
   const user = await getSessionUser();
-  const profile = await prisma.organizerProfile.findUnique({
-    where: { userId: user.id },
-    include: {
-      events: {
-        where: {
-          organizer: { userId: user.id },
-        },
-        include: {
-          ticketTypes: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      },
-    },
-  });
+  const { profile, events } = await listOrganizerEvents(user);
 
-  // Maksimal 5 acara dengan variasi: 3 Active, 1 Pending, 1 Rejected
-  const allEvents = getNormalizedOrganizerEvents(profile?.events ?? []);
+  // Status asli dari database, dipetakan ke kunci tampilan
+  const allEvents = events.map((ev) => ({ ...ev, key: STATUS_KEY[ev.status] ?? ev.status }));
 
   const counts = {
     ALL: allEvents.length,
-    ACTIVE: allEvents.filter((e) => e.status === 'ACTIVE').length,
-    PENDING: allEvents.filter((e) => e.status === 'PENDING').length,
-    REJECTED: allEvents.filter((e) => e.status === 'REJECTED').length,
+    ACTIVE: allEvents.filter((e) => e.key === 'ACTIVE').length,
+    PENDING: allEvents.filter((e) => e.key === 'PENDING').length,
+    REJECTED: allEvents.filter((e) => e.key === 'REJECTED').length,
   };
 
   const filteredEvents =
-    activeFilter === 'ALL'
-      ? allEvents
-      : allEvents.filter((ev) => ev.status === activeFilter);
+    activeFilter === 'ALL' ? allEvents : allEvents.filter((ev) => ev.key === activeFilter);
 
   return (
     <div className="max-w-5xl mx-auto bg-white rounded-3xl border border-pink-100 p-5 sm:p-8 space-y-6 shadow-2xs">
@@ -138,8 +143,16 @@ export default async function OrganizerEventsPage({ searchParams }) {
             <tbody className="divide-y divide-pink-100/80 text-xs">
               {filteredEvents.map((ev) => (
                 <tr key={ev.id} className="hover:bg-[#FFF9FC] transition">
-                  <td className="py-4 px-3 font-extrabold text-[#1C1C1C]">
-                    {ev.title}
+                  <td className="py-4 px-3">
+                    <p className="font-extrabold text-[#1C1C1C]">{ev.title}</p>
+                    <p className="text-[11px] font-medium text-gray-500 mt-0.5">
+                      {formatDate(ev.startsAt)}
+                    </p>
+                    {ev.rejectReason && (
+                      <p className="text-[11px] font-semibold text-rose-600 mt-1">
+                        Alasan ditolak: {ev.rejectReason}
+                      </p>
+                    )}
                   </td>
                   <td className="py-4 px-3 text-gray-600">
                     {ev.venueName}
@@ -153,10 +166,10 @@ export default async function OrganizerEventsPage({ searchParams }) {
                   <td className="py-4 px-3 text-right">
                     <span
                       className={`inline-block px-3 py-1 rounded-full text-[11px] font-extrabold border ${
-                        STATUS_BADGE[ev.status]
+                        STATUS_BADGE[ev.key]
                       }`}
                     >
-                      {STATUS_LABEL[ev.status]}
+                      {STATUS_LABEL[ev.key]}
                     </span>
                   </td>
                 </tr>

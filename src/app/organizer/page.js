@@ -1,7 +1,6 @@
 import Link from 'next/link';
-import { prisma } from '@/lib/prisma';
 import { getSessionUser } from '@/server/auth/session';
-import { getNormalizedOrganizerEvents } from '@/lib/organizerEventsHelper';
+import { getOrganizerDashboard } from '@/server/organizer/service';
 
 function formatRupiah(amount) {
   return new Intl.NumberFormat('id-ID', {
@@ -15,39 +14,9 @@ function formatRupiah(amount) {
 
 export default async function OrganizerHome() {
   const user = await getSessionUser();
-  const profile = await prisma.organizerProfile.findUnique({
-    where: { userId: user.id },
-    include: {
-      events: {
-        where: {
-          organizer: { userId: user.id },
-        },
-        include: {
-          ticketTypes: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      },
-    },
-  });
-
-  // Maksimal 5 acara dengan variasi: 3 Active, 1 Pending, 1 Rejected
-  const events = getNormalizedOrganizerEvents(profile?.events ?? []);
-
-  const totalRevenue = events.reduce((sum, ev) => sum + ev.revenue, 0);
-  const totalSold = events.reduce((sum, ev) => sum + ev.sold, 0);
-  const totalQuota = events.reduce((sum, ev) => sum + ev.quota, 0);
-  const remainingQuota = Math.max(0, totalQuota - totalSold);
-
-  // Daftar acara aktif (persis 3 acara yang berstatus ACTIVE)
-  const activeEvents = events.filter((ev) => ev.status === 'ACTIVE');
-
-  // Data grafik batang dari 5 acara tersebut
-  const chartItems = events.map((ev, idx) => ({
-    label: ev.title ? ev.title.slice(0, 8) : `Event ${idx + 1}`,
-    fullTitle: ev.title || `Event ${idx + 1}`,
-    sold: ev.sold,
-  }));
-
+  // Semua angka berasal dari database (lihat server/organizer/service.js)
+  const { profile, totals, eventCount, activeEvents, chartItems } = await getOrganizerDashboard(user);
+  const { revenue: totalRevenue, sold: totalSold, remaining: remainingQuota } = totals;
   const maxChartSold = Math.max(...chartItems.map((c) => c.sold), 1);
 
   return (
@@ -84,7 +53,7 @@ export default async function OrganizerHome() {
           href="/organizer/events"
           className="px-4 py-2 rounded-xl text-xs font-extrabold bg-[#FFF0F6] text-[#FF2E9A] hover:bg-[#FFE4F2] transition"
         >
-          Daftar Acara ({events.length})
+          Daftar Acara ({eventCount})
         </Link>
         <Link
           href="/organizer/events/create"
