@@ -1,9 +1,22 @@
 'use client';
 
 import { useState, use, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
 import { useApiData } from '@/lib/useApiData';
+
+function getEventGenre(gig) {
+  if (!gig) return 'Musik';
+  if (Array.isArray(gig.genres) && gig.genres.length > 0) {
+    return String(gig.genres[0]).trim();
+  }
+  const raw = gig.genre || gig.category || gig.musicGenre || gig.genreName;
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.trim();
+  }
+  return 'Musik';
+}
 
 export default function EventDetailPage({ params }) {
   const resolvedParams = use(params);
@@ -50,6 +63,23 @@ export default function EventDetailPage({ params }) {
   }
 
   const photos = event.gallery?.length ? event.gallery : [event.image];
+  const eventGenre = getEventGenre(event);
+
+  // Kelompokkan tiket berdasarkan status sesuai 3 baris pada desain
+  const onSaleTickets = event.ticketCategories.filter((t) => t.status === 'on_sale');
+  const notReleasedTickets = event.ticketCategories.filter(
+    (t) => t.status === 'not_released'
+  );
+  const soldOutTickets = event.ticketCategories.filter(
+    (t) => t.status === 'sold_out' || t.status === 'ended'
+  );
+
+  // Nominal "Harga Mulai Dari" diambil dari harga termurah tiket yang sedang On Sale
+  const onSalePrices = onSaleTickets
+    .map((t) => Number(t.price))
+    .filter((p) => !Number.isNaN(p) && p > 0);
+  const startingPrice =
+    onSalePrices.length > 0 ? Math.min(...onSalePrices) : Number(event.price || 0);
 
   const handlePrevSlide = () => {
     setCurrentSlide((prev) => (prev === 0 ? photos.length - 1 : prev - 1));
@@ -112,7 +142,6 @@ export default function EventDetailPage({ params }) {
 
   // Handler klik "Beli Sekarang" saat sudah ada item di keranjang (ke Checkout)
   const handleProceedCheckout = () => {
-    // Simpan sementara ke sessionStorage agar halaman Checkout bisa membacanya
     const checkoutPayload = {
       eventId: event.id,
       eventTitle: event.title,
@@ -132,15 +161,6 @@ export default function EventDetailPage({ params }) {
     sessionStorage.setItem('gigspace_checkout', JSON.stringify(checkoutPayload));
     router.push(`/checkout?eventId=${event.id}`);
   };
-
-  // Kelompokkan tiket berdasarkan status sesuai 3 baris pada desain
-  const onSaleTickets = event.ticketCategories.filter((t) => t.status === 'on_sale');
-  const notReleasedTickets = event.ticketCategories.filter(
-    (t) => t.status === 'not_released'
-  );
-  const soldOutTickets = event.ticketCategories.filter(
-    (t) => t.status === 'sold_out' || t.status === 'ended'
-  );
 
   // Komponen Internal: Kartu Tiket dengan Notch Sobekan & Status Badge
   const renderTicketCard = (ticket) => {
@@ -318,9 +338,16 @@ export default function EventDetailPage({ params }) {
         {/* Baris Atas: Kiri (Info Konser) & Kanan (Harga Mulai Dari / Rincian Pesanan) */}
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-8">
           
-          {/* SISI KIRI: Judul, Penyelenggara, Lokasi, Tanggal, Jam */}
+          {/* SISI KIRI: Genre, Judul, Penyelenggara, Lokasi, Tanggal, Jam */}
           <div className="space-y-4 flex-1">
             <div className="space-y-2.5">
+              <Link
+                href={`/discover?genre=${encodeURIComponent(eventGenre)}`}
+                className="inline-flex items-center px-3 py-1 rounded-full bg-[#FFF0F6] border border-pink-200 text-[#FF2E9A] text-xs font-extrabold uppercase tracking-wider hover:bg-[#FFE4F2] transition"
+              >
+                {eventGenre}
+              </Link>
+
               <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-[#FF2E9A] tracking-tight leading-tight">
                 {event.title}
               </h1>
@@ -399,7 +426,7 @@ export default function EventDetailPage({ params }) {
                     Harga Mulai Dari
                   </p>
                   <p className="text-base sm:text-lg font-black text-[#FF2E9A] mt-0.5">
-                    {formatRupiah(event.price)}
+                    {formatRupiah(startingPrice)}
                   </p>
                 </div>
 

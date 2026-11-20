@@ -1,5 +1,12 @@
 import Link from 'next/link';
 
+const GENRE_ITEMS = [
+  { label: 'Indie', href: '/discover?genre=Indie' },
+  { label: 'Rock', href: '/discover?genre=Rock' },
+  { label: 'Classic', href: '/discover?genre=Classic' },
+  { label: 'All Genre', href: '/discover' },
+];
+
 export default function Footer() {
   return (
     <footer className="bg-[#1C1C1C] text-gray-300 pt-12 pb-6 px-6 md:px-16 mt-20 border-t border-gray-800">
@@ -47,11 +54,13 @@ export default function Footer() {
         <div>
           <h4 className="text-white font-bold mb-3">Genre</h4>
           <ul className="space-y-2 text-gray-400">
-            <li>Indie</li>
-            <li>Rock</li>
-            <li>Solo</li>
-            <li>Classic</li>
-            <li>All Genre</li>
+            {GENRE_ITEMS.map((item) => (
+              <li key={item.label}>
+                <Link href={item.href} className="hover:text-[#FF2E9A] transition">
+                  {item.label}
+                </Link>
+              </li>
+            ))}
           </ul>
         </div>
       </div>

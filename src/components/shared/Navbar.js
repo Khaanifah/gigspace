@@ -1,18 +1,64 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
+import { createBrowserClient } from '@supabase/ssr';
 
 export default function Navbar() {
-  const { user, isLoggedIn, userEmail } = useAuth();
+  const authContext = useAuth();
+  const [supabaseUser, setSupabaseUser] = useState(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Status login berasal dari server (cookie sesi), bukan sessionStorage atau role dari browser
-  const activeLoggedIn = Boolean(isLoggedIn);
-  const activeEmail = userEmail || '';
-  const activeName = user?.fullName || activeEmail;
-  const activeAvatar = null;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const saved = sessionStorage.getItem('gigspace_session');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed?.email) {
+            setSupabaseUser({
+              email: parsed.email,
+              name: parsed.name || parsed.email.split('@')[0],
+              avatarUrl: parsed.avatarUrl || null,
+            });
+            return;
+          }
+        }
+      } catch {
+        // Abaikan
+      }
+
+      if (!supabaseUrl || !supabaseAnonKey) return;
+
+      try {
+        const supabase = createBrowserClient(supabaseUrl, supabaseAnonKey);
+        const { data } = await supabase.auth.getUser();
+        if (data?.user) {
+          setSupabaseUser({
+            email: data.user.email,
+            name:
+              data.user.user_metadata?.full_name ||
+              data.user.email?.split('@')[0] ||
+              'User',
+            avatarUrl: data.user.user_metadata?.avatar_url || null,
+          });
+        }
+      } catch {
+        // Abaikan
+      }
+    };
+
+    checkSession();
+  }, [supabaseUrl, supabaseAnonKey]);
+
+  const activeLoggedIn = Boolean(authContext?.isLoggedIn || supabaseUser);
+  const activeEmail = authContext?.userEmail || supabaseUser?.email || '';
+  const activeName = supabaseUser?.name || activeEmail;
+  const activeAvatar = supabaseUser?.avatarUrl || null;
 
   return (
     <header className="bg-[#1C1C1C] text-white sticky top-0 z-50 border-b border-gray-800">
@@ -47,7 +93,7 @@ export default function Navbar() {
           </button>
         </div>
 
-        {/* Grup Kanan: Menu Navigasi (Desktop) + Auth (Semua Layar) + Hamburger (Mobile) */}
+        {/* Grup Kanan: Menu Navigasi (Desktop) + JOIN / Profile + Hamburger (Mobile) */}
         <div className="flex items-center gap-2.5 lg:gap-6 flex-shrink-0">
           <nav className="hidden lg:flex items-center gap-6 text-xs tracking-wider font-semibold uppercase">
             <Link href="/discover" className="hover:text-[#FF2E9A] transition">DISCOVER</Link>
@@ -56,7 +102,6 @@ export default function Navbar() {
             <Link href="/contact" className="hover:text-[#FF2E9A] transition">CONTACT US</Link>
           </nav>
 
-          {/* Avatar Profil / Tombol SIGN UP menyatu dengan gap-6 di desktop */}
           {activeLoggedIn ? (
             <Link
               href="/profile"
@@ -80,11 +125,11 @@ export default function Navbar() {
               href="/auth"
               className="bg-[#FF2E9A] text-white text-[11px] sm:text-xs px-4 sm:px-5 py-1.5 rounded-full hover:bg-pink-600 transition font-bold uppercase tracking-wider whitespace-nowrap"
             >
-              SIGN UP
+              JOIN
             </Link>
           )}
 
-          {/* Hamburger Button khusus Mobile/Tablet (< lg) */}
+          {/* Hamburger Button Mobile/Tablet (< lg) */}
           <button
             type="button"
             onClick={() => setIsMobileMenuOpen((prev) => !prev)}

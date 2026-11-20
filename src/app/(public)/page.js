@@ -4,6 +4,65 @@ import { useRef } from 'react';
 import Link from 'next/link';
 import { useApiData } from '@/lib/useApiData';
 
+function isTicketOnSale(ticket) {
+  if (!ticket) return false;
+  if (ticket.isOnSale === true || ticket.onSale === true) return true;
+  if (ticket.isSoldOut === true || ticket.soldOut === true) return false;
+
+  const status = String(ticket.status ?? ticket.state ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  return status === 'on_sale' || status === 'available';
+}
+
+function getTicketPrice(ticket) {
+  const raw = ticket?.price ?? ticket?.harga ?? ticket?.amount ?? 0;
+  const num = Number(raw);
+  return Number.isNaN(num) ? 0 : num;
+}
+
+function getLowestOnSalePrice(gig) {
+  if (!gig) return null;
+
+  const explicitOnSaleField =
+    gig.lowestOnSalePrice ??
+    gig.minOnSalePrice ??
+    gig.onSalePrice ??
+    gig.lowest_on_sale_price;
+
+  if (explicitOnSaleField !== undefined && explicitOnSaleField !== null) {
+    const num = Number(explicitOnSaleField);
+    if (!Number.isNaN(num) && num > 0) return num;
+  }
+
+  const categories =
+    gig.ticketCategories ||
+    gig.tickets ||
+    gig.ticket_categories ||
+    gig.categories ||
+    [];
+
+  if (Array.isArray(categories) && categories.length > 0) {
+    const onSalePrices = categories
+      .filter(isTicketOnSale)
+      .map(getTicketPrice)
+      .filter((p) => p > 0);
+
+    if (onSalePrices.length > 0) {
+      return Math.min(...onSalePrices);
+    }
+
+    // Jika daftar tiket ada tapi tidak ada satu pun yang sedang on_sale (misal semua sold_out)
+    return null;
+  }
+
+  // Fallback jika API belum menyertakan array tiket
+  const fallback = Number(gig.startingPrice ?? gig.price ?? 0);
+  return !Number.isNaN(fallback) && fallback > 0 ? fallback : null;
+}
+
 export default function HomePage() {
   const popularScrollRef = useRef(null);
 
@@ -29,10 +88,18 @@ export default function HomePage() {
       .replace('IDR', 'Rp');
   };
 
+  const renderStartingPrice = (gig) => {
+    const lowestOnSale = getLowestOnSalePrice(gig);
+    if (lowestOnSale === null) {
+      return <span className="text-[#FF2E9A]/75">Sold Out</span>;
+    }
+    return formatRupiah(lowestOnSale);
+  };
+
   return (
     <div className="bg-[#FAF8ED] min-h-screen text-[#1C1C1C] pb-20 font-sans">
       
-      {/* 1. HERO BANNER FULL-WIDTH (PERSIS SCREENSHOT 1) */}
+      {/* 1. HERO BANNER FULL-WIDTH */}
       <section className="relative h-[320px] sm:h-[400px] md:h-[460px] w-full overflow-hidden bg-black flex flex-col items-center justify-center text-center px-4">
         <img
           src="https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1600&auto=format&fit=crop"
@@ -135,7 +202,7 @@ export default function HomePage() {
                     Mulai dari
                   </p>
                   <p className="text-sm font-black text-[#FF2E9A]">
-                    {formatRupiah(gig.price)}
+                    {renderStartingPrice(gig)}
                   </p>
                 </div>
               </Link>
@@ -143,7 +210,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* 3. SECTION: UPCOMING GIGS (GRID 4 KOLOM - PERSIS SCREENSHOT 2) */}
+        {/* 3. SECTION: UPCOMING GIGS (GRID 4 KOLOM) */}
         <section className="space-y-5">
           <div className="flex items-center gap-2.5">
             {/* Ikon Kalender Panah Pink */}
@@ -199,7 +266,7 @@ export default function HomePage() {
                     Mulai dari
                   </p>
                   <p className="text-sm font-black text-[#FF2E9A]">
-                    {formatRupiah(gig.price)}
+                    {renderStartingPrice(gig)}
                   </p>
                 </div>
               </Link>
@@ -207,7 +274,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* 4. SECTION: THIS WEEK (LIST VERTIKAL + TIMELINE TANGGAL DI KANAN) */}
+        {/* 4. SECTION: THIS WEEK (LIST VERTIKAL + FOTO DI KIRI + TIMELINE KALENDER DI KANAN) */}
         <section className="space-y-6">
           <div className="flex items-center gap-2.5">
             {/* Ikon Kalender Grid Pink */}
@@ -229,54 +296,79 @@ export default function HomePage() {
             </h2>
           </div>
 
-          <div className="space-y-8">
-            {thisWeekGroups.map((group) => (
-              <div
-                key={`${group.date}-${group.month}`}
-                className="flex items-stretch justify-between gap-6"
-              >
-                {/* Kolom Kiri: Daftar Gigs per Tanggal (BISA DIKLIK KE /events/[id]) */}
-                <div className="flex-1 divide-y divide-pink-200/40">
-                  {group.gigs.map((gig) => (
-                    <Link
-                      key={`week-${group.date}-${gig.id}`}
-                      href={`/events/${gig.id}`}
-                      className="group py-4 first:pt-0 flex items-center gap-4 hover:bg-[#FFF0F6]/50 transition rounded-xl px-2 -mx-2"
-                    >
-                      <div className="w-24 h-16 sm:w-28 sm:h-18 rounded-xl overflow-hidden bg-black flex-shrink-0">
-                        <img
-                          src={gig.image}
-                          alt={gig.title}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                      </div>
+          <div className="space-y-6">
+            {thisWeekGroups.map((group, groupIdx) => {
+              const isLastGroup = groupIdx === thisWeekGroups.length - 1;
 
-                      <div className="space-y-1">
-                        <h3 className="text-sm sm:text-base font-extrabold text-[#FF2E9A] group-hover:underline">
-                          {gig.title}
-                        </h3>
-                        <p className="text-xs font-medium text-[#FF2E9A]/70">
-                          {gig.location} &mdash; {gig.organizer}
-                        </p>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
+              return (
+                <div
+                  key={`${group.date}-${group.month}-${groupIdx}`}
+                  className="flex items-stretch justify-between gap-5 sm:gap-7"
+                >
+                  {/* Kiri & Tengah: Foto Konser di Kiri + Detail Acara */}
+                  <div className="flex-1 space-y-4 min-w-0">
+                    {group.gigs.map((gig) => {
+                      const dateMetaText = [
+                        gig.dateLabel ||
+                          (group.date && group.month
+                            ? `${group.date} ${group.month}`
+                            : null),
+                        gig.location,
+                        gig.organizer,
+                      ]
+                        .filter(Boolean)
+                        .join(' • ');
 
-                {/* Kolom Kanan: Badge Tanggal & Garis Vertikal Pink */}
-                <div className="flex flex-col items-center flex-shrink-0 w-12">
-                  <div className="w-11 h-12 rounded-xl bg-white border border-[#FF2E9A] flex flex-col items-center justify-center shadow-2xs">
-                    <span className="text-sm font-black text-[#FF2E9A] leading-none">
-                      {group.date}
-                    </span>
-                    <span className="text-[10px] font-bold text-[#FF2E9A] mt-0.5">
-                      {group.month}
-                    </span>
+                      return (
+                        <Link
+                          key={`week-${group.date}-${gig.id}`}
+                          href={`/events/${gig.id}`}
+                          className="group flex items-center gap-4 sm:gap-5 hover:bg-[#FFF0F6]/50 transition rounded-xl p-1.5 -mx-1.5"
+                        >
+                          {/* Foto Konser di Sebelah Kiri */}
+                          <div className="w-24 h-16 sm:w-32 sm:h-20 rounded-xl overflow-hidden bg-black flex-shrink-0 border border-pink-100/80">
+                            <img
+                              src={gig.image}
+                              alt={gig.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                          </div>
+
+                          {/* Judul & Info Detail */}
+                          <div className="min-w-0 space-y-1">
+                            <h3 className="text-sm sm:text-base font-extrabold text-[#FF2E9A] group-hover:underline truncate">
+                              {gig.title}
+                            </h3>
+                            <p className="text-[11px] sm:text-xs font-medium text-[#FF2E9A]/75 line-clamp-2">
+                              {dateMetaText}
+                            </p>
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
-                  <div className="w-[1.5px] flex-1 bg-[#FF2E9A]/40 mt-2" />
+
+                  {/* Kanan: Indikator Kalender + Garis Penghubung Vertikal */}
+                  <div className="flex flex-col items-center flex-shrink-0 w-14">
+                    <div className="w-13 h-15 rounded-xl bg-white border border-pink-200 overflow-hidden flex flex-col items-center justify-between shadow-2xs">
+                      <span className="w-full bg-[#FFF0F6] text-[#FF2E9A] text-[9px] font-extrabold uppercase tracking-wider py-0.5 text-center border-b border-pink-100">
+                        {group.month}
+                      </span>
+                      <span className="text-base font-black text-[#1C1C1C] leading-none py-1">
+                        {group.date}
+                      </span>
+                      <span className="text-[9px] font-bold uppercase text-gray-400 pb-1 leading-none">
+                        {group.day || 'EVENT'}
+                      </span>
+                    </div>
+
+                    {!isLastGroup && (
+                      <div className="w-px flex-1 border-r border-dashed border-[#FF2E9A]/45 mt-2 -mb-6" />
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
 

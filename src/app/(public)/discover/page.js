@@ -1,16 +1,94 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { EmptyState, ErrorState, GigsGridSkeleton } from '@/components/shared/UIStates';
 import { useApiData } from '@/lib/useApiData';
 
-export default function DiscoverPage() {
-  const [selectedGenre, setSelectedGenre] = useState('All');
+const GENRE_CHOICES = ['All', 'Indie', 'Rock', 'Classic'];
+
+function isTicketOnSale(ticket) {
+  if (!ticket) return false;
+  if (ticket.isOnSale === true || ticket.onSale === true) return true;
+  if (ticket.isSoldOut === true || ticket.soldOut === true) return false;
+
+  const status = String(ticket.status ?? ticket.state ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  return status === 'on_sale' || status === 'available';
+}
+
+function getTicketPrice(ticket) {
+  const raw = ticket?.price ?? ticket?.harga ?? ticket?.amount ?? 0;
+  const num = Number(raw);
+  return Number.isNaN(num) ? 0 : num;
+}
+
+function getLowestOnSalePrice(gig) {
+  if (!gig) return null;
+
+  const explicitOnSaleField =
+    gig.lowestOnSalePrice ??
+    gig.minOnSalePrice ??
+    gig.onSalePrice ??
+    gig.lowest_on_sale_price;
+
+  if (explicitOnSaleField !== undefined && explicitOnSaleField !== null) {
+    const num = Number(explicitOnSaleField);
+    if (!Number.isNaN(num) && num > 0) return num;
+  }
+
+  const categories =
+    gig.ticketCategories ||
+    gig.tickets ||
+    gig.ticket_categories ||
+    gig.categories ||
+    [];
+
+  if (Array.isArray(categories) && categories.length > 0) {
+    const onSalePrices = categories
+      .filter(isTicketOnSale)
+      .map(getTicketPrice)
+      .filter((p) => p > 0);
+
+    if (onSalePrices.length > 0) {
+      return Math.min(...onSalePrices);
+    }
+
+    return null;
+  }
+
+  const fallback = Number(gig.startingPrice ?? gig.price ?? 0);
+  return !Number.isNaN(fallback) && fallback > 0 ? fallback : null;
+}
+
+function DiscoverContent() {
+  const searchParams = useSearchParams();
+  const genreFromUrl = searchParams.get('genre');
+
+  const resolveInitialGenre = (val) => {
+    if (!val) return 'All';
+    const matched = GENRE_CHOICES.find(
+      (g) => g.toLowerCase() === String(val).trim().toLowerCase()
+    );
+    return matched || String(val).trim();
+  };
+
+  const [selectedGenre, setSelectedGenre] = useState(() =>
+    resolveInitialGenre(genreFromUrl)
+  );
   const [sortBy, setSortBy] = useState('newest');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setSelectedGenre(resolveInitialGenre(genreFromUrl));
+    setCurrentPage(1);
+  }, [genreFromUrl]);
 
   const ITEMS_PER_PAGE = 16; // 4 kolom x 4 baris
 
@@ -34,6 +112,14 @@ export default function DiscoverPage() {
     })
       .format(amount || 0)
       .replace('IDR', 'Rp');
+  };
+
+  const renderStartingPrice = (gig) => {
+    const lowestOnSale = getLowestOnSalePrice(gig);
+    if (lowestOnSale === null) {
+      return <span className="text-[#FF2E9A]/75">Sold Out</span>;
+    }
+    return formatRupiah(lowestOnSale);
   };
 
   return (
@@ -77,12 +163,12 @@ export default function DiscoverPage() {
                     d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
                   />
                 </svg>
-                <span>Filter {selectedGenre !== 'All' ? `(${selectedGenre})` : ''}</span>
+                <span>{selectedGenre === 'All' ? 'All Genre' : selectedGenre}</span>
               </button>
 
               {showFilterMenu && (
                 <div className="absolute left-0 mt-2 w-44 bg-white border border-pink-200 rounded-xl shadow-lg py-1.5 z-30">
-                  {['All', 'Indie', 'Rock', 'Solo', 'Classic'].map((genre) => (
+                  {GENRE_CHOICES.map((genre) => (
                     <button
                       key={genre}
                       type="button"
@@ -97,7 +183,7 @@ export default function DiscoverPage() {
                           : 'text-gray-700 hover:bg-pink-50'
                       }`}
                     >
-                      {genre === 'All' ? 'Semua Genre' : genre}
+                      {genre === 'All' ? 'All Genre' : genre}
                     </button>
                   ))}
                 </div>
@@ -201,7 +287,7 @@ export default function DiscoverPage() {
                           Mulai dari
                         </p>
                         <p className="text-sm md:text-base font-black text-[#FF2E9A] mt-0.5">
-                          {formatRupiah(gig.price)}
+                          {renderStartingPrice(gig)}
                         </p>
                       </div>
                     </div>
@@ -252,5 +338,19 @@ export default function DiscoverPage() {
         </section>
       </main>
     </div>
+  );
+}
+
+export default function DiscoverPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="bg-[#FAF8ED] min-h-screen py-16 px-4 font-sans">
+          <GigsGridSkeleton count={16} />
+        </div>
+      }
+    >
+      <DiscoverContent />
+    </Suspense>
   );
 }

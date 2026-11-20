@@ -8,33 +8,16 @@ const ROLES = [
     id: 'user',
     label: 'User',
     redirectTo: '/',
-    icon: (
-      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
-        <circle cx="12" cy="7" r="4" />
-      </svg>
-    ),
   },
   {
     id: 'organizer',
     label: 'Organizer',
     redirectTo: '/organizer',
-    icon: (
-      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
-        <rect x="3" y="4" width="18" height="17" rx="2" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16 2v4M8 2v4M3 10h18" />
-      </svg>
-    ),
   },
   {
     id: 'admin',
     label: 'Admin',
     redirectTo: '/admin/curation',
-    icon: (
-      <svg className="w-5 h-5 stroke-current" fill="none" strokeWidth="2" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
   },
 ];
 
@@ -153,9 +136,9 @@ function PasswordField({ id, label, value, onChange, autoComplete, placeholder, 
 export default function AuthPage() {
   const codeRefs = useRef([]);
 
-  // Langkah: 'role' | 'login' | 'register' | 'verify' | 'forgot' | 'reset'
-  const [step, setStep] = useState('role');
-  const [selectedRole, setSelectedRole] = useState(null);
+  // Langkah: 'login' | 'register' | 'verify' | 'forgot' | 'reset'
+  const [step, setStep] = useState('login');
+  const [selectedRoleId, setSelectedRoleId] = useState('user');
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -167,6 +150,8 @@ export default function AuthPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  const selectedRole = ROLES.find((r) => r.id === selectedRoleId) || ROLES[0];
 
   // Timer hitung mundur kirim ulang kode
   useEffect(() => {
@@ -236,11 +221,11 @@ export default function AuthPage() {
       const { json } = await postJson('/api/auth/login', {
         email: cleanEmail,
         password,
-        door: selectedRole?.id ?? 'user',
+        door: selectedRole.id,
       });
 
       if (json?.success) {
-        window.location.href = json.data.redirectTo || selectedRole?.redirectTo || '/';
+        window.location.href = json.data.redirectTo || selectedRole.redirectTo || '/';
         return;
       }
 
@@ -328,7 +313,7 @@ export default function AuthPage() {
       const { json } = await postJson('/api/auth/verify-email', {
         email: email.trim(),
         token,
-        door: selectedRole?.id ?? 'user',
+        door: selectedRole.id,
       });
 
       if (!json?.success) {
@@ -461,7 +446,7 @@ export default function AuthPage() {
           </span>
           <span className="flex-1 h-px bg-gray-200" />
         </div>
-        {step === 'role' && errorMessage && <ErrorBox>{errorMessage}</ErrorBox>}
+        {errorMessage && <ErrorBox>{errorMessage}</ErrorBox>}
         <div className="grid grid-cols-3 gap-2">
           {ROLES.map((role) => (
             <button
@@ -536,7 +521,7 @@ export default function AuthPage() {
       <div className="bg-white relative flex flex-col justify-center p-6 sm:p-12">
         {/* TOMBOL BACK DINAMIS DI POJOK KIRI ATAS */}
         <div className="absolute top-6 left-6 sm:top-8 sm:left-10">
-          {step === 'role' && (
+          {step === 'login' && (
             <Link
               href="/"
               className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#FF2E9A] hover:opacity-80 group transition"
@@ -549,15 +534,6 @@ export default function AuthPage() {
               <span>Kembali ke Home</span>
             </Link>
           )}
-          {step === 'login' && (
-            <BackButton
-              label="Kembali Pilih Role"
-              onClick={() => {
-                setSelectedRole(null);
-                goTo('role');
-              }}
-            />
-          )}
           {(step === 'register' || step === 'verify' || step === 'forgot') && (
             <BackButton label="Kembali ke Login" onClick={() => goTo('login')} />
           )}
@@ -565,50 +541,15 @@ export default function AuthPage() {
         </div>
 
         <div className="w-full max-w-md mx-auto space-y-7 pt-8 sm:pt-0">
-          {/* LANGKAH 1: PILIH ROLE */}
-          {step === 'role' && (
-            <>
-              <div className="space-y-1.5">
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1C1C1C] tracking-tight">
-                  Selamat datang!
-                </h1>
-                <p className="text-xs sm:text-sm text-gray-500">
-                  Pilih role akun Anda terlebih dahulu untuk melanjutkan.
-                </p>
-              </div>
-
-              <div className="space-y-3.5">
-                {ROLES.map((role) => (
-                  <button
-                    key={role.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRole(role);
-                      goTo('login');
-                    }}
-                    className="w-full px-5 py-4 rounded-2xl border border-pink-100 bg-[#FFF9FC] hover:bg-[#FF2E9A] hover:border-[#FF2E9A] text-[#1C1C1C] hover:text-white shadow-2xs hover:shadow-md transition-all duration-200 flex items-center gap-4 group cursor-pointer"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-[#FFF0F6] text-[#FF2E9A] group-hover:bg-white/20 group-hover:text-white flex items-center justify-center transition-colors flex-shrink-0">
-                      {role.icon}
-                    </div>
-                    <span className="text-sm sm:text-base font-extrabold tracking-wide">{role.label}</span>
-                  </button>
-                ))}
-              </div>
-
-              {fastLoginPanel}
-            </>
-          )}
-
-          {/* LANGKAH 2: LOGIN EMAIL + PASSWORD */}
+          {/* LOGIN EMAIL + PASSWORD + DROPDOWN ROLE */}
           {step === 'login' && (
             <>
               <div className="space-y-1.5">
                 <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1C1C1C] tracking-tight">
-                  Masuk sebagai {selectedRole?.label}
+                  Masuk sebagai {selectedRole.label}
                 </h1>
                 <p className="text-xs sm:text-sm text-gray-500">
-                  Masukkan email dan password akun Anda.
+                  Masukkan email, password, dan role akun Anda.
                 </p>
               </div>
 
@@ -622,7 +563,7 @@ export default function AuthPage() {
                   type="email"
                   autoComplete="email"
                   autoFocus
-                  placeholder="nama@email.com"
+                  placeholder="Masukkan email"
                   value={email}
                   onChange={setEmail}
                 />
@@ -634,6 +575,35 @@ export default function AuthPage() {
                   value={password}
                   onChange={setPassword}
                 />
+
+                <div className="space-y-1.5">
+                  <label htmlFor="auth-role" className="block text-xs font-bold text-[#1C1C1C]">
+                    Role
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="auth-role"
+                      value={selectedRoleId}
+                      onChange={(e) => setSelectedRoleId(e.target.value)}
+                      className={`${inputClass} appearance-none pr-10 bg-white cursor-pointer`}
+                    >
+                      {ROLES.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.label}
+                        </option>
+                      ))}
+                    </select>
+                    <svg
+                      className="w-4 h-4 text-gray-400 pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
 
                 <div className="flex justify-end">
                   <button
@@ -650,7 +620,7 @@ export default function AuthPage() {
                 </button>
               </form>
 
-              {selectedRole?.id === 'user' ? (
+              {selectedRole.id === 'user' ? (
                 <p className="text-center text-xs text-gray-500">
                   Belum punya akun?{' '}
                   <button type="button" onClick={() => goTo('register')} className={linkButtonClass}>
@@ -659,7 +629,7 @@ export default function AuthPage() {
                 </p>
               ) : (
                 <p className="text-center text-xs text-gray-400">
-                  Akun {selectedRole?.label} dibuat oleh pengelola Gigspace.
+                  Akun {selectedRole.label} dibuat oleh pengelola Gigspace.
                 </p>
               )}
 
@@ -667,7 +637,7 @@ export default function AuthPage() {
             </>
           )}
 
-          {/* LANGKAH 3: DAFTAR (ROLE USER) */}
+          {/* DAFTAR (ROLE USER) */}
           {step === 'register' && (
             <>
               <div className="space-y-1.5">
@@ -696,7 +666,7 @@ export default function AuthPage() {
                   label="Email"
                   type="email"
                   autoComplete="email"
-                  placeholder="nama@email.com"
+                    placeholder="Masukkan email"
                   value={email}
                   onChange={setEmail}
                 />
@@ -732,7 +702,7 @@ export default function AuthPage() {
             </>
           )}
 
-          {/* LANGKAH 4: VERIFIKASI EMAIL (KODE 6 DIGIT) */}
+          {/* VERIFIKASI EMAIL (KODE 6 DIGIT) */}
           {step === 'verify' && (
             <>
               <div className="space-y-1.5">
@@ -758,7 +728,7 @@ export default function AuthPage() {
             </>
           )}
 
-          {/* LANGKAH 5: LUPA PASSWORD */}
+          {/* LUPA PASSWORD */}
           {step === 'forgot' && (
             <>
               <div className="space-y-1.5">
@@ -779,7 +749,7 @@ export default function AuthPage() {
                   type="email"
                   autoComplete="email"
                   autoFocus
-                  placeholder="nama@email.com"
+                  placeholder="Masukkan email"
                   value={email}
                   onChange={setEmail}
                 />
@@ -790,7 +760,7 @@ export default function AuthPage() {
             </>
           )}
 
-          {/* LANGKAH 6: BUAT PASSWORD BARU */}
+          {/* BUAT PASSWORD BARU */}
           {step === 'reset' && (
             <>
               <div className="space-y-1.5">
