@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { createBrowserClient } from '@supabase/ssr';
+import { useAuth } from '@/context/AuthContext';
 
 const ADMIN_NAV_ITEMS = [
   { label: 'Antrean Kurasi', href: '/admin/curation' },
@@ -12,29 +12,13 @@ const ADMIN_NAV_ITEMS = [
   { label: 'Pesan Kontak', href: '/admin/contact' },
 ];
 
-export default function AdminShell({ children, adminEmail: initialEmail }) {
+export default function AdminShell({ children }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [adminEmail, setAdminEmail] = useState(initialEmail || 'admin@gigspace.id');
+  const { userEmail, logout } = useAuth(); // status login dari server
+  const adminEmail = userEmail;
   const dropdownRef = useRef(null);
-
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('gigspace_session');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.email) setAdminEmail(parsed.email);
-      }
-    } catch {
-      // Abaikan
-    }
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -47,13 +31,7 @@ export default function AdminShell({ children, adminEmail: initialEmail }) {
   }, []);
 
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch {
-      // Abaikan
-    }
-    document.cookie = 'gigspace_role=; path=/; max-age=0; SameSite=Lax';
-    sessionStorage.removeItem('gigspace_session');
+    await logout();
     window.location.href = '/auth';
   };
 

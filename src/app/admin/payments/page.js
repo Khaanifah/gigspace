@@ -380,7 +380,7 @@ export default function AdminPaymentsPage() {
                   src={proofUrl ?? undefined}
                   alt={`Bukti Transfer ${selectedTrx.id}`}
                   onClick={() => setIsZoomed((prev) => !prev)}
-                  className={`rounded-lg transition-transform duration-200 cursor-zoom-in ${
+                  className={`rounded-lg bg-white transition-transform duration-200 cursor-zoom-in ${
                     isZoomed
                       ? 'scale-150 cursor-zoom-out'
                       : 'max-h-72 w-auto object-contain'

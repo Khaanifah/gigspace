@@ -23,7 +23,11 @@ async function ensureProfile(authUser) {
   if (existing) return existing;
 
   try {
-    return await prisma.user.create({ data: { authUserId: authUser.id, email } });
+    // Nama dari pendaftaran (metadata Supabase) hanya dipakai sebagai nama awal.
+    const metaName = typeof authUser.user_metadata?.full_name === 'string' ? authUser.user_metadata.full_name.trim().slice(0, 100) : '';
+    return await prisma.user.create({
+      data: { authUserId: authUser.id, email, ...(metaName.length >= 2 ? { fullName: metaName } : {}) },
+    });
   } catch (err) {
     if (err?.code !== 'P2002') throw err; // bukan bentrok unique
     // Dua kemungkinan: request paralel membuat baris yang sama, atau email sudah ada
