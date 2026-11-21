@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { decodeQr, DecoderLoadError } from '@/lib/qrDecoder';
+import { toCheckInBody } from '@/lib/checkinInput';
+
+const SCAN_INTERVAL_MS = 120; // ~8 pemindaian per detik: cukup cepat, tidak membebani HP
 
 // Judul layar merah menurut kode error dari API check-in.
 const FAIL_TITLE = {
@@ -16,6 +20,9 @@ const FAIL_TITLE = {
   UNAUTHENTICATED: 'SESI BERAKHIR',
 };
 
+const FALLBACK_LOAD_FAILED =
+  'Pemindai cadangan gagal dimuat. Muat ulang halaman, atau gunakan input manual.';
+
 function formatCheckedInAt(iso) {
   if (!iso) return '';
   return new Date(iso).toLocaleTimeString('id-ID', {
@@ -26,12 +33,69 @@ function formatCheckedInAt(iso) {
   });
 }
 
+// Pesan yang bisa ditindaklanjuti untuk tiap penyebab kamera gagal
+function cameraErrorMessage(err) {
+  switch (err?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Izin kamera ditolak. Izinkan akses kamera untuk situs ini di pengaturan browser, lalu coba lagi.';
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'Kamera tidak ditemukan di perangkat ini. Gunakan unggah gambar QR atau input manual.';
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return 'Kamera sedang dipakai aplikasi lain. Tutup aplikasi itu, lalu coba lagi.';
+    default:
+      return 'Kamera tidak bisa dibuka. Coba lagi, atau gunakan unggah gambar QR atau input manual.';
+  }
+}
+
+// Kamera belakang bila ada; bila batasan tak terpenuhi (mis. laptop), pakai kamera apa pun.
+async function openCameraStream() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+  } catch (err) {
+    if (err?.name === 'OverconstrainedError' || err?.name === 'ConstraintNotSatisfiedError') {
+      return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
+    throw err;
+  }
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('IMAGE_LOAD_FAILED'));
+    };
+    img.src = url;
+  });
+}
+
+const vibrate = (pattern) => {
+  try {
+    navigator.vibrate?.(pattern);
+  } catch {
+    // tidak didukung: abaikan
+  }
+};
+
 export default function TicketCheckinPage() {
   // null | { status: 'success', ticket } | { status: 'invalid', code, reason }
   const [scanResult, setScanResult] = useState(null);
   const [isChecking, setIsChecking] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [isScanning, setIsScanning] = useState(true);
+  const [cameraKey, setCameraKey] = useState(0); // naikkan untuk membuka kamera ulang
   const [manualToken, setManualToken] = useState('');
 
   const videoRef = useRef(null);
@@ -40,9 +104,9 @@ export default function TicketCheckinPage() {
   const animFrameRef = useRef(null);
   const busyRef = useRef(false); // cegah dua permintaan check-in untuk satu pemindaian
 
-  // Kirim isi QR ke API. Server yang memutuskan valid atau tidaknya (kepemilikan acara,
-  // status tiket, kedaluwarsa), dan mencatat check-in secara atomik.
-  // Token TIDAK boleh diubah huruf besar/kecilnya: qrToken bersifat case-sensitive.
+  // Kirim hasil scan ke API: isi QR (token) ATAU kode tiket tercetak (TK-XXXXXXXX) dari input manual.
+  // Server yang memutuskan valid atau tidaknya (kepemilikan acara, status tiket, kedaluwarsa),
+  // dan mencatat check-in secara atomik. Token TIDAK boleh diubah huruf besar/kecilnya: case-sensitive.
   const submitToken = async (rawText) => {
     if (busyRef.current) return;
     const token = String(rawText || '').trim();
@@ -59,13 +123,15 @@ export default function TicketCheckinPage() {
       const res = await fetch('/api/organizer/tickets/check-in', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify(toCheckInBody(token)),
       });
       const json = await res.json().catch(() => null);
 
       if (res.ok && json?.success) {
+        vibrate(120);
         setScanResult({ status: 'success', ticket: json.data.ticket });
       } else {
+        vibrate([120, 70, 120]);
         setScanResult({
           status: 'invalid',
           code: json?.error?.code ?? 'UNKNOWN',
@@ -73,6 +139,7 @@ export default function TicketCheckinPage() {
         });
       }
     } catch {
+      vibrate([120, 70, 120]);
       setScanResult({
         status: 'invalid',
         code: 'NETWORK',
@@ -85,111 +152,124 @@ export default function TicketCheckinPage() {
     }
   };
 
-  // Nyalakan kamera & deteksi QR secara otomatis saat berada di gerbang scan
+  // Nyalakan kamera & pindai QR terus-menerus selama berada di gerbang scan
   useEffect(() => {
-    const shouldRunCamera = !scanResult && !isChecking && isScanning;
-    if (!shouldRunCamera) {
+    const stopAll = () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
-      return;
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+
+    const shouldRunCamera = !scanResult && !isChecking && isScanning;
+    if (!shouldRunCamera) {
+      stopAll();
+      return undefined;
     }
 
     let cancelled = false;
 
-    const startCamera = async () => {
+    const start = async () => {
       setCameraError('');
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          setCameraError('Kamera tidak didukung di browser ini. Gunakan unggah gambar QR atau input manual.');
-          return;
-        }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false,
-        });
-
-        if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-
-        if ('BarcodeDetector' in window) {
-          const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-
-          const detectLoop = async () => {
-            if (cancelled || !videoRef.current) return;
-            try {
-              if (videoRef.current.readyState === 4) {
-                const barcodes = await detector.detect(videoRef.current);
-                if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-                  submitToken(barcodes[0].rawValue);
-                  return;
-                }
-              }
-            } catch {
-              // Abaikan frame yang gagal terdeteksi
-            }
-            animFrameRef.current = requestAnimationFrame(detectLoop);
-          };
-
-          animFrameRef.current = requestAnimationFrame(detectLoop);
-        } else {
-          setCameraError(
-            'Browser ini belum mendukung deteksi QR otomatis. Gunakan Chrome di Android, atau input manual (mis. pemindai USB).'
-          );
-        }
-      } catch {
-        setCameraError('Izin kamera belum diberikan atau tidak tersedia. Gunakan unggah gambar QR atau input manual.');
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError(
+          window.isSecureContext
+            ? 'Browser ini tidak mendukung akses kamera. Gunakan unggah gambar QR atau input manual.'
+            : 'Kamera hanya bisa dipakai lewat HTTPS (atau localhost). Buka halaman ini lewat alamat https://, atau gunakan unggah gambar QR dan input manual.'
+        );
+        return;
       }
+
+      let stream;
+      try {
+        stream = await openCameraStream();
+      } catch (err) {
+        if (!cancelled) setCameraError(cameraErrorMessage(err));
+        return;
+      }
+
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) return;
+      video.srcObject = stream;
+      try {
+        await video.play();
+      } catch {
+        // play() dibatalkan karena tampilan berganti: tidak apa-apa
+      }
+
+      let lastRun = 0;
+      let working = false;
+
+      const tick = async (ts) => {
+        if (cancelled) return;
+
+        if (!working && ts - lastRun >= SCAN_INTERVAL_MS && video.readyState >= 2 && video.videoWidth > 0) {
+          lastRun = ts;
+          working = true;
+          try {
+            const raw = await decodeQr(video);
+            if (raw && !cancelled) {
+              submitToken(raw);
+              return; // berhenti: kamera dimatikan oleh efek ini setelah state berubah
+            }
+          } catch (err) {
+            if (err instanceof DecoderLoadError) {
+              if (!cancelled) setCameraError(FALLBACK_LOAD_FAILED);
+              return;
+            }
+            // kesalahan frame lain: abaikan, coba frame berikutnya
+          } finally {
+            working = false;
+          }
+        }
+
+        if (!cancelled) animFrameRef.current = requestAnimationFrame(tick);
+      };
+
+      animFrameRef.current = requestAnimationFrame(tick);
     };
 
-    startCamera();
+    start();
 
     return () => {
       cancelled = true;
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
+      stopAll();
     };
-  }, [scanResult, isChecking, isScanning]);
+    // submitToken hanya memakai ref dan setter state (stabil), jadi sengaja tidak jadi dependensi
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanResult, isChecking, isScanning, cameraKey]);
 
-  // Fallback scan dari file gambar QR
+  // Scan dari file gambar QR (foto atau screenshot)
   const handleImageFileScan = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = ''; // izinkan memilih file yang sama lagi
     if (!file) return;
 
+    let reason = 'QR Code tidak terdeteksi dari gambar yang dipilih. Pastikan QR terlihat jelas dan tidak terpotong.';
     try {
-      if ('BarcodeDetector' in window) {
-        const bitmap = await createImageBitmap(file);
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-        const codes = await detector.detect(bitmap);
-        if (codes?.length > 0 && codes[0].rawValue) {
-          submitToken(codes[0].rawValue);
-          return;
-        }
+      const img = await loadImageFromFile(file);
+      const raw = await decodeQr(img, { still: true });
+      if (raw) {
+        submitToken(raw);
+        return;
       }
-    } catch {
-      // Lanjut ke pesan gagal baca QR
+    } catch (err) {
+      if (err instanceof DecoderLoadError) reason = FALLBACK_LOAD_FAILED;
+      else if (err?.message === 'IMAGE_LOAD_FAILED') reason = 'File yang dipilih bukan gambar yang valid.';
     }
 
     setIsScanning(false);
-    setScanResult({
-      status: 'invalid',
-      code: 'NO_QR',
-      reason: 'QR Code tidak terdeteksi dari gambar yang dipilih.',
-    });
+    setScanResult({ status: 'invalid', code: 'NO_QR', reason });
   };
 
   // Input manual: juga menampung pemindai USB/Bluetooth yang mengetik isi QR lalu menekan Enter.
@@ -204,7 +284,6 @@ export default function TicketCheckinPage() {
     setScanResult(null);
     setIsScanning(true);
     setManualToken('');
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   return (
@@ -290,7 +369,7 @@ export default function TicketCheckinPage() {
 
             {/* Area Kamera / Frame QR */}
             <div className="relative bg-[#141414] rounded-3xl overflow-hidden border-2 border-[#FF2E9A] aspect-square max-h-[380px] mx-auto w-full flex items-center justify-center shadow-md">
-              <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
+              <video ref={videoRef} playsInline muted autoPlay className="w-full h-full object-cover" />
 
               {/* Bingkai Panduan QR di Tengah */}
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
@@ -298,9 +377,20 @@ export default function TicketCheckinPage() {
               </div>
             </div>
 
-            {cameraError && (
-              <p className="text-xs font-semibold text-gray-600 bg-white border border-pink-100 rounded-2xl px-4 py-3">
-                {cameraError}
+            {cameraError ? (
+              <div className="text-xs font-semibold text-gray-600 bg-white border border-pink-100 rounded-2xl px-4 py-3 space-y-2.5">
+                <p>{cameraError}</p>
+                <button
+                  type="button"
+                  onClick={() => setCameraKey((k) => k + 1)}
+                  className="bg-[#FFF0F6] hover:bg-[#FFE4F2] text-[#FF2E9A] border border-pink-200 text-xs font-extrabold px-4 py-2 rounded-xl transition cursor-pointer"
+                >
+                  Coba buka kamera lagi
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs font-semibold text-gray-500">
+                Dekatkan QR hingga memenuhi bingkai dan pastikan cukup terang.
               </p>
             )}
 
@@ -321,25 +411,34 @@ export default function TicketCheckinPage() {
                 UNGGAH GAMBAR QR
               </button>
 
-              <form onSubmit={handleManualSubmit} className="flex gap-2.5">
-                <input
-                  type="text"
-                  value={manualToken}
-                  onChange={(e) => setManualToken(e.target.value)}
-                  placeholder="Input manual / pemindai USB (isi QR)"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  aria-label="Isi QR tiket"
-                  className="flex-1 min-w-0 bg-white border border-pink-200 text-xs font-mono px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/35"
-                />
-                <button
-                  type="submit"
-                  disabled={!manualToken.trim()}
-                  className="bg-white hover:bg-[#FFF9FC] disabled:opacity-50 border border-pink-200 text-[#FF2E9A] font-extrabold text-xs px-5 rounded-xl transition cursor-pointer"
-                >
-                  Cek
-                </button>
+              <form onSubmit={handleManualSubmit} className="space-y-1.5 text-left">
+                <label htmlFor="manual-code" className="block text-xs font-bold text-gray-600">
+                  Tidak bisa scan? Ketik kode tiket
+                </label>
+                <div className="flex gap-2.5">
+                  <input
+                    id="manual-code"
+                    type="text"
+                    value={manualToken}
+                    onChange={(e) => setManualToken(e.target.value)}
+                    placeholder="Contoh: TK-7K2M9QXA"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="flex-1 min-w-0 bg-white border border-pink-200 text-sm font-mono px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#FF2E9A]/35"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!manualToken.trim()}
+                    className="bg-[#1C1C1C] hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed text-white font-extrabold text-xs px-6 rounded-xl transition cursor-pointer"
+                  >
+                    Cek
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  Kode ada di bawah QR pada e-ticket penonton. Pemindai USB juga bisa mengisi kolom ini.
+                </p>
               </form>
             </div>
           </div>
